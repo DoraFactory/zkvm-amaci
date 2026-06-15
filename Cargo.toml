@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "crates/baby-jubjub",
+    "crates/eddsa-poseidon",
+    "crates/maci-crypto",
     "crates/proof-core",
     "crates/proof-risc0-host",
     "crates/proof-risc0-guest",

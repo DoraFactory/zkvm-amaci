@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-maci-crypto = { path = "../../../crates/maci-crypto" }
-baby-jubjub = { path = "../../../crates/baby-jubjub" }
-eddsa-poseidon = { path = "../../../crates/eddsa-poseidon" }
+maci-crypto = { path = "../maci-crypto" }
+baby-jubjub = { path = "../baby-jubjub" }
+eddsa-poseidon = { path = "../eddsa-poseidon" }
 ark-bn254 = "0.5"
 ark-ff = "0.5"
 light-poseidon = "0.4"
