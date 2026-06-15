@@ -1,0 +1,11 @@
+[package]
+name = "amaci-proof-sp1-program"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+amaci-proof-core = { path = "../proof-core" }
+
+[features]
+sp1 = []
+

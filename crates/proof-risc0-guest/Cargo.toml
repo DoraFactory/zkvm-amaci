@@ -1,0 +1,16 @@
+[package]
+name = "amaci-proof-risc0-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+amaci-proof-core = { path = "../proof-core" }
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"], optional = true }
+
+[features]
+risc0 = ["dep:risc0-zkvm"]
+
+[[bin]]
+name = "amaci-proof-risc0-guest"
+path = "src/main.rs"
+required-features = ["risc0"]

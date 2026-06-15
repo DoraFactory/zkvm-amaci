@@ -1,0 +1,22 @@
+[package]
+name = "amaci-proof-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+maci-crypto = { path = "../../../crates/maci-crypto" }
+baby-jubjub = { path = "../../../crates/baby-jubjub" }
+eddsa-poseidon = { path = "../../../crates/eddsa-poseidon" }
+ark-bn254 = "0.5"
+ark-ff = "0.5"
+light-poseidon = "0.4"
+num-bigint = { version = "0.4", features = ["serde"] }
+num-traits = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+# Cargo 1.79 cannot parse zeroize_derive 1.5.0's edition-2024 manifest.
+# Pin the transitive macro crate through the workspace resolution.
+zeroize_derive = "=1.4.2"
+
+[dev-dependencies]
+serde_json = "1.0"

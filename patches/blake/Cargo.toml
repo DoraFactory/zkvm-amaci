@@ -1,0 +1,9 @@
+[package]
+name = "blake"
+version = "2.0.2"
+edition = "2021"
+license = "MIT"
+description = "RISC0-compatible local shim for the legacy blake crate API"
+
+[dependencies]
+blake2 = "0.10"
