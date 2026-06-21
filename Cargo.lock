@@ -94,6 +94,7 @@ version = "0.1.0"
 dependencies = [
  "amaci-proof-core",
  "amaci-proof-risc0-methods",
+ "bincode",
  "maci-crypto",
  "num-bigint 0.4.6",
  "risc0-zkvm",
