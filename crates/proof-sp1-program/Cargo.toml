@@ -5,7 +5,4 @@ edition = "2021"
 
 [dependencies]
 amaci-proof-core = { path = "../proof-core" }
-
-[features]
-sp1 = []
-
+sp1-zkvm = "=6.3.0"

@@ -196,6 +196,6 @@ Implemented:
 Current intentional limits:
 
 - `proof-core` is `std`/`num-bigint` based, not `no_std`; this keeps cryptographic equivalence auditable first.
-- RISC0/SP1 SDK versions are not pinned in manifests yet. The wrapper source is present, but feature builds require selecting SDK versions compatible with the project toolchain.
+- RISC0 is pinned to `risc0-zkvm = 3.0.5`; SP1 is pinned to `sp1-sdk = 6.3.0`, `sp1-build = 6.3.0`, and `sp1-zkvm = 6.3.0`. SP1 builds require the Succinct `succinct` toolchain installed with `sp1up`.
 - The Deactivate/AddNewKey fixtures are generated under `zkvm-amaci/tests/golden/` and were checked with manual Circom `--O0` witness verification because Circomkit's default wasm tester path hits a Circom 2.1.9 `--O1` simplification panic for ProcessDeactivate.
 - RISC0 host/methods wiring is now present for `process-messages-2-1-5` and `tally-votes-2-1-1`; see `docs/risc0_proving_runbook.md` for setup and run commands. Real local proving for `process-messages-2-1-5` was started successfully but stopped on a low-spec machine before completion.

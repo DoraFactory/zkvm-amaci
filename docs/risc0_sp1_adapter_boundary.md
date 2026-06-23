@@ -63,7 +63,7 @@ Allowed in `proof-sp1-program`:
 - SP1 public values commit
 - panic/error conversion appropriate for guest failure
 
-SP1 host-side work, when added later:
+SP1 host-side work:
 
 - SP1 ELF / verifying key
 - SP1 proof types
@@ -81,6 +81,10 @@ Not allowed in SP1 wrapper:
 Implemented wrapper shape:
 
 ```rust
+#![no_main]
+
+sp1_zkvm::entrypoint!(main);
+
 fn main() {
     let input = sp1_zkvm::io::read::<amaci_proof_core::ProverInput>();
     let output = amaci_proof_core::execute_proof_logic(&input)
@@ -89,7 +93,7 @@ fn main() {
 }
 ```
 
-The source code is feature-gated behind `sp1`. The manifest does not pin `sp1-zkvm` yet; choose a project-compatible SDK/toolchain before enabling that feature in CI.
+The SP1 adapter pins `sp1-zkvm`, `sp1-build`, and `sp1-sdk` at `6.3.0`. `amaci-proof-sp1-program` is the guest entrypoint and `amaci-proof-sp1-host` provides `prove` and `verify` commands for local proof artifact closure. Building the SP1 host requires the Succinct `succinct` Rust toolchain installed by `sp1up`.
 
 ## Serialization boundary
 

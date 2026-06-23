@@ -7,6 +7,7 @@ members = [
     "crates/proof-risc0-host",
     "crates/proof-risc0-guest",
     "crates/proof-risc0-methods",
+    "crates/proof-sp1-host",
     "crates/proof-sp1-program",
 ]
 resolver = "2"
