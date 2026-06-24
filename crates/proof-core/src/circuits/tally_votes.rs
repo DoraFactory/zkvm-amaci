@@ -1,11 +1,11 @@
 use crate::circuits::{assert_input_hash, poseidon2};
 use crate::error::{ProofError, ProofResult};
 use crate::field::{pow5, Field};
+use crate::hash_backend::hash_pair;
 use crate::merkle::{check_inclusion, check_root, state_leaf_hash, zero_root};
 use crate::packing::unpack_tally_packed_vals;
 use crate::public_output::TallyVotesPublicOutput;
 use crate::types::TallyVotesInput;
-use maci_crypto::poseidon;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
@@ -125,7 +125,7 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
         num_vote_options,
     );
     let new_results_root = check_root(&new_results, input.vote_option_tree_depth)?;
-    let expected_new_tally = poseidon(&[new_results_root, input.new_results_root_salt.clone()]);
+    let expected_new_tally = hash_pair(&new_results_root, &input.new_results_root_salt);
     if expected_new_tally != input.new_tally_commitment {
         return Err(ProofError::CommitmentMismatch {
             name: "newTallyCommitment",

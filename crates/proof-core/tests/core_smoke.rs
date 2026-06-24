@@ -1,14 +1,20 @@
 use amaci_proof_core::circuits::process_messages::{message_chain, EmptyRule};
 use amaci_proof_core::crypto::{ecdh_formatted_priv_key, poseidon_decrypt_without_check};
+#[cfg(feature = "zkvm-native-crypto")]
+use amaci_proof_core::crypto::{
+    native_encrypt_for_testing, native_sign_command_for_testing, private_to_pub_key,
+    verify_command_signature,
+};
 use amaci_proof_core::error::ProofError;
 use amaci_proof_core::field::{add, ensure_bits, field, mul, sub, two_pow};
+use amaci_proof_core::hash_backend::{hash_fields, hash_pair, hash_public_inputs, hash_state_leaf};
 use amaci_proof_core::merkle::{check_root, hash10_exact, hash5_exact, root_from_path};
 use amaci_proof_core::packing::{
     path_index_at, uint32_to_96_circom, unpack_element_high_to_low,
     unpack_process_messages_packed_vals, unpack_tally_packed_vals,
 };
 use amaci_proof_core::{execute_proof_logic, ProverInput, TallyVotesInput};
-use maci_crypto::{compute_input_hash, hash10, poseidon, SNARK_FIELD_SIZE};
+use maci_crypto::SNARK_FIELD_SIZE;
 use num_bigint::BigUint;
 use num_traits::One;
 
@@ -155,6 +161,88 @@ fn ecdh_zero_x_pub_key_matches_circom_identity_behavior() {
     assert_eq!(out, [BigUint::from(0u32), BigUint::one()]);
 }
 
+#[cfg(feature = "zkvm-native-crypto")]
+#[test]
+fn native_ed25519_command_signature_roundtrips() {
+    let priv_key = BigUint::from(123456u32);
+    let pub_key = private_to_pub_key(&priv_key);
+    let packed_command = [
+        BigUint::from(11u32),
+        BigUint::from(22u32),
+        BigUint::from(33u32),
+    ];
+    let (r8, s) = native_sign_command_for_testing(&priv_key, &packed_command);
+    assert!(verify_command_signature(&pub_key, &r8, &s, &packed_command).unwrap());
+
+    let bad_command = [
+        BigUint::from(11u32),
+        BigUint::from(22u32),
+        BigUint::from(34u32),
+    ];
+    assert!(!verify_command_signature(&pub_key, &r8, &s, &bad_command).unwrap());
+}
+
+#[cfg(feature = "zkvm-native-crypto")]
+#[test]
+fn native_x25519_shared_key_roundtrips() {
+    let alice_priv = BigUint::from(111u32);
+    let bob_priv = BigUint::from(222u32);
+    let alice_pub = private_to_pub_key(&alice_priv);
+    let bob_pub = private_to_pub_key(&bob_priv);
+
+    let alice_shared = ecdh_formatted_priv_key(&alice_priv, &bob_pub);
+    let bob_shared = ecdh_formatted_priv_key(&bob_priv, &alice_pub);
+    assert_eq!(alice_shared, bob_shared);
+    assert_ne!(alice_shared, [BigUint::from(0u32), BigUint::one()]);
+}
+
+#[cfg(feature = "zkvm-native-crypto")]
+#[test]
+fn native_decrypt_roundtrips() {
+    let key = [BigUint::from(11u32), BigUint::from(22u32)];
+    let nonce = BigUint::from(7u32);
+    let len = 7;
+    let mut plaintext = vec![
+        BigUint::from(1u32),
+        BigUint::from(2u32),
+        BigUint::from(3u32),
+        BigUint::from(4u32),
+        BigUint::from(5u32),
+        BigUint::from(6u32),
+        BigUint::from(7u32),
+    ];
+    plaintext.resize(9, BigUint::from(0u32));
+
+    let ciphertext = native_encrypt_for_testing(&plaintext, &key, &nonce, len).unwrap();
+    let decrypted = poseidon_decrypt_without_check(&ciphertext, &key, &nonce, len).unwrap();
+    assert_eq!(decrypted, plaintext);
+}
+
+#[cfg(feature = "zkvm-native-crypto")]
+#[test]
+fn executes_native_single_valid_process_message() {
+    let input = amaci_proof_core::sample_inputs::process_messages_native_1_1().unwrap();
+    let output = execute_proof_logic(&ProverInput::ProcessMessages(input.clone())).unwrap();
+    let amaci_proof_core::PublicOutput::ProcessMessages(output) = output else {
+        panic!("wrong output variant");
+    };
+    assert_eq!(output.input_hash, input.input_hash);
+    assert_eq!(output.new_state_commitment, input.new_state_commitment);
+}
+
+#[cfg(feature = "zkvm-native-crypto")]
+#[test]
+fn executes_native_process_messages_2_1_5() {
+    let input = amaci_proof_core::sample_inputs::process_messages_native_2_1_5().unwrap();
+    let output = execute_proof_logic(&ProverInput::ProcessMessages(input.clone())).unwrap();
+    let amaci_proof_core::PublicOutput::ProcessMessages(output) = output else {
+        panic!("wrong output variant");
+    };
+    assert_eq!(output.input_hash, input.input_hash);
+    assert_eq!(output.batch_end_hash, input.batch_end_hash);
+    assert_eq!(output.new_state_commitment, input.new_state_commitment);
+}
+
 #[test]
 fn poseidon_decrypt_rejects_bad_ciphertext_shape_and_nonce() {
     let key = [BigUint::from(1u32), BigUint::from(2u32)];
@@ -185,8 +273,8 @@ fn executes_minimal_first_tally_batch() {
     let packed_vals = BigUint::from(0u32) + (BigUint::from(1u32) << 32usize);
     let zeros5 = vec![BigUint::from(0u32); 5];
     let zero_state_leaf = vec![BigUint::from(0u32); 10];
-    let state_leaf_hash = hash10(&zero_state_leaf).unwrap();
-    let state_root = poseidon(&[
+    let state_leaf_hash = hash_state_leaf(&zero_state_leaf).unwrap();
+    let state_root = hash_fields(&[
         state_leaf_hash,
         BigUint::from(0u32),
         BigUint::from(0u32),
@@ -194,13 +282,14 @@ fn executes_minimal_first_tally_batch() {
         BigUint::from(0u32),
     ]);
     let state_salt = BigUint::from(11u32);
-    let state_commitment = poseidon(&[state_root.clone(), state_salt.clone()]);
+    let state_commitment = hash_pair(&state_root, &state_salt);
     let current_tally_commitment = BigUint::from(0u32);
     let votes = vec![vec![BigUint::from(0u32); 5]];
     let current_results = vec![BigUint::from(0u32); 5];
     let new_results_root_salt = BigUint::from(12u32);
-    let new_tally_commitment = poseidon(&[poseidon(&zeros5), new_results_root_salt.clone()]);
-    let input_hash = compute_input_hash(&[
+    let new_results_root = hash_fields(&zeros5);
+    let new_tally_commitment = hash_pair(&new_results_root, &new_results_root_salt);
+    let input_hash = hash_public_inputs(&[
         packed_vals.clone(),
         state_commitment.clone(),
         current_tally_commitment.clone(),

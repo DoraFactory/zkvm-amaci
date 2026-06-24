@@ -1,15 +1,16 @@
 use crate::circuits::{assert_input_hash, coord_pub_key_hash};
 use crate::crypto::ecdh_formatted_priv_key;
 use crate::error::{ProofError, ProofResult};
+use crate::hash_backend::{hash_fields, hash_pair};
 use crate::merkle::check_inclusion;
 use crate::public_output::AddNewKeyPublicOutput;
 use crate::types::AddNewKeyInput;
-use maci_crypto::{poseidon, rerandomize_ciphertext, Ciphertext};
+use maci_crypto::{rerandomize_ciphertext, Ciphertext};
 use num_bigint::BigUint;
 
 /// Mirrors `amaci/power/addNewKey.circom::AddNewKey`.
 pub fn execute(input: &AddNewKeyInput) -> ProofResult<AddNewKeyPublicOutput> {
-    let expected_nullifier = poseidon(&[input.old_private_key.clone(), input.poll_id.clone()]);
+    let expected_nullifier = hash_pair(&input.old_private_key, &input.poll_id);
     if expected_nullifier != input.nullifier {
         return Err(ProofError::CommitmentMismatch {
             name: "nullifier",
@@ -19,8 +20,8 @@ pub fn execute(input: &AddNewKeyInput) -> ProofResult<AddNewKeyPublicOutput> {
     }
 
     let shared_key = ecdh_formatted_priv_key(&input.old_private_key, &input.coord_pub_key);
-    let shared_key_hash = poseidon(&shared_key);
-    let expected_deactivate_leaf = poseidon(&[
+    let shared_key_hash = hash_fields(&shared_key);
+    let expected_deactivate_leaf = hash_fields(&[
         input.c1[0].clone(),
         input.c1[1].clone(),
         input.c2[0].clone(),
@@ -55,20 +56,20 @@ pub fn execute(input: &AddNewKeyInput) -> ProofResult<AddNewKeyPublicOutput> {
     if rerandomized.c1 != input.d1 {
         return Err(ProofError::CommitmentMismatch {
             name: "d1",
-            expected: poseidon(&rerandomized.c1),
-            actual: poseidon(&input.d1),
+            expected: hash_fields(&rerandomized.c1),
+            actual: hash_fields(&input.d1),
         });
     }
     if rerandomized.c2 != input.d2 {
         return Err(ProofError::CommitmentMismatch {
             name: "d2",
-            expected: poseidon(&rerandomized.c2),
-            actual: poseidon(&input.d2),
+            expected: hash_fields(&rerandomized.c2),
+            actual: hash_fields(&input.d2),
         });
     }
 
     let coord_hash = coord_pub_key_hash(&input.coord_pub_key);
-    let new_pub_key_hash = poseidon(&input.new_pub_key);
+    let new_pub_key_hash = hash_fields(&input.new_pub_key);
     assert_input_hash(
         &input.input_hash,
         &[

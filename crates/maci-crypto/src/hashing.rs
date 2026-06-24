@@ -5,26 +5,46 @@ use light_poseidon::{Poseidon, PoseidonHasher};
 use num_bigint::BigUint;
 use sha2::{Digest, Sha256};
 
-/// Main Poseidon hash function
-/// Hashes an array of BigUint values using Poseidon with Circom-compatible parameters
-pub fn poseidon(inputs: &[BigUint]) -> BigUint {
-    if inputs.is_empty() {
+fn field_to_fr(value: &BigUint) -> Fr {
+    biguint_to_fr(&(value % &*SNARK_FIELD_SIZE))
+}
+
+fn poseidon_fr_inputs(fr_inputs: &[Fr]) -> BigUint {
+    if fr_inputs.is_empty() {
         return BigUint::from(0u32);
     }
 
-    // Convert BigUint inputs to Fr
-    let fr_inputs: Vec<Fr> = inputs
-        .iter()
-        .map(|v| biguint_to_fr(&(v % &*SNARK_FIELD_SIZE)))
-        .collect();
-
-    // Create Poseidon hasher with appropriate width
-    let width = fr_inputs.len();
-    let mut poseidon = Poseidon::<Fr>::new_circom(width).expect("Failed to create Poseidon hasher");
-
-    // Hash and convert back to BigUint
-    let result_fr = poseidon.hash(&fr_inputs).expect("Poseidon hash failed");
+    let mut poseidon =
+        Poseidon::<Fr>::new_circom(fr_inputs.len()).expect("Failed to create Poseidon hasher");
+    let result_fr = poseidon.hash(fr_inputs).expect("Poseidon hash failed");
     fr_to_biguint(&result_fr)
+}
+
+fn poseidon_refs(inputs: &[&BigUint]) -> BigUint {
+    let fr_inputs: Vec<Fr> = inputs.iter().map(|value| field_to_fr(value)).collect();
+    poseidon_fr_inputs(&fr_inputs)
+}
+
+fn poseidon_padded(num_elements: usize, elements: &[BigUint]) -> Result<BigUint> {
+    if elements.len() > num_elements {
+        return Err(CryptoError::HashElementsExceedMax {
+            actual: elements.len(),
+            max: num_elements,
+        });
+    }
+
+    let mut fr_inputs = Vec::with_capacity(num_elements);
+    fr_inputs.extend(elements.iter().map(field_to_fr));
+    fr_inputs.resize(num_elements, Fr::from(0u64));
+
+    Ok(poseidon_fr_inputs(&fr_inputs))
+}
+
+/// Main Poseidon hash function
+/// Hashes an array of BigUint values using Poseidon with Circom-compatible parameters
+pub fn poseidon(inputs: &[BigUint]) -> BigUint {
+    let fr_inputs: Vec<Fr> = inputs.iter().map(field_to_fr).collect();
+    poseidon_fr_inputs(&fr_inputs)
 }
 
 /// Hash exactly 2 elements using Poseidon
@@ -73,24 +93,12 @@ pub fn poseidon_t6(inputs: &[BigUint]) -> Result<BigUint> {
 
 /// Hash two BigUints (convenience function for Merkle trees)
 pub fn hash_left_right(left: &BigUint, right: &BigUint) -> BigUint {
-    poseidon(&[left.clone(), right.clone()])
+    poseidon_refs(&[left, right])
 }
 
 /// Hash up to N elements, padding with zeros if necessary
 pub fn hash_n(num_elements: usize, elements: &[BigUint]) -> Result<BigUint> {
-    if elements.len() > num_elements {
-        return Err(CryptoError::HashElementsExceedMax {
-            actual: elements.len(),
-            max: num_elements,
-        });
-    }
-
-    let mut padded = elements.to_vec();
-    while padded.len() < num_elements {
-        padded.push(BigUint::from(0u32));
-    }
-
-    Ok(poseidon(&padded))
+    poseidon_padded(num_elements, elements)
 }
 
 /// Hash 2 elements
@@ -129,14 +137,15 @@ pub fn hash10(elements: &[BigUint]) -> Result<BigUint> {
         });
     }
 
-    let mut padded = elements.to_vec();
-    while padded.len() < MAX {
-        padded.push(BigUint::from(0u32));
-    }
+    let first_end = elements.len().min(5);
+    let hash1 = poseidon_padded(5, &elements[..first_end])?;
+    let hash2_val = if elements.len() > 5 {
+        poseidon_padded(5, &elements[5..])?
+    } else {
+        poseidon_padded(5, &[])?
+    };
 
-    let hash1 = poseidon(&padded[0..5]);
-    let hash2_val = poseidon(&padded[5..10]);
-    poseidon_t3(&[hash1, hash2_val])
+    Ok(poseidon_refs(&[&hash1, &hash2_val]))
 }
 
 /// Hash up to 12 elements
@@ -150,25 +159,24 @@ pub fn hash12(elements: &[BigUint]) -> Result<BigUint> {
         });
     }
 
-    let mut padded = elements.to_vec();
-    while padded.len() < MAX {
-        padded.push(BigUint::from(0u32));
-    }
+    let first_end = elements.len().min(5);
+    let hash1 = poseidon_padded(5, &elements[..first_end])?;
+    let hash2_val = if elements.len() > 5 {
+        let second_end = elements.len().min(10);
+        poseidon_padded(5, &elements[5..second_end])?
+    } else {
+        poseidon_padded(5, &[])?
+    };
+    let zero = BigUint::from(0u32);
+    let element10 = elements.get(10).unwrap_or(&zero);
+    let element11 = elements.get(11).unwrap_or(&zero);
 
-    let hash1 = poseidon(&padded[0..5]);
-    let hash2_val = poseidon(&padded[5..10]);
-
-    Ok(poseidon(&[
-        hash1,
-        hash2_val,
-        padded[10].clone(),
-        padded[11].clone(),
-    ]))
+    Ok(poseidon_refs(&[&hash1, &hash2_val, element10, element11]))
 }
 
 /// Hash a single BigUint
 pub fn hash_one(pre_image: &BigUint) -> BigUint {
-    poseidon(&[pre_image.clone(), BigUint::from(0u32)])
+    poseidon_padded(2, std::slice::from_ref(pre_image)).expect("hash_one input fits arity 2")
 }
 
 /// EVM-compatible SHA256 hash for uint256 array
@@ -177,12 +185,17 @@ pub fn sha256_hash(inputs: &[BigUint]) -> BigUint {
     let mut hasher = Sha256::new();
 
     for input in inputs {
-        let mut bytes = input.to_bytes_be();
-        // Pad to 32 bytes (uint256)
-        while bytes.len() < 32 {
-            bytes.insert(0, 0);
+        let bytes = input.to_bytes_be();
+        let mut word = [0u8; 32];
+        if bytes.len() > 32 {
+            hasher.update(&bytes);
+            continue;
+        } else if bytes.len() == 32 {
+            word.copy_from_slice(&bytes);
+        } else {
+            word[32 - bytes.len()..].copy_from_slice(&bytes);
         }
-        hasher.update(&bytes);
+        hasher.update(word);
     }
 
     let result = hasher.finalize();

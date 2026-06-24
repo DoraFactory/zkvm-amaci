@@ -5,16 +5,16 @@ pub mod tally_votes;
 
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
-use maci_crypto::{compute_input_hash, poseidon};
+use crate::hash_backend::{hash_message_13, hash_pair, hash_public_inputs};
 
 /// `HashLeftRight` use for coordinator public keys in AMACI input hashers.
 pub(crate) fn coord_pub_key_hash(coord_pub_key: &[Field; 2]) -> Field {
-    poseidon(coord_pub_key)
+    hash_pair(&coord_pub_key[0], &coord_pub_key[1])
 }
 
 /// Mirrors `utils/hasherSha256.circom::Sha256Hasher` through `compute_input_hash`.
 pub(crate) fn assert_input_hash(actual: &Field, values: &[Field]) -> ProofResult<()> {
-    let expected = compute_input_hash(values);
+    let expected = hash_public_inputs(values);
     if &expected == actual {
         Ok(())
     } else {
@@ -26,25 +26,10 @@ pub(crate) fn assert_input_hash(actual: &Field, values: &[Field]) -> ProofResult
 }
 
 pub(crate) fn poseidon2(left: &Field, right: &Field) -> Field {
-    poseidon(&[left.clone(), right.clone()])
+    hash_pair(left, right)
 }
 
 /// Mirrors `utils/hasherPoseidon.circom::Hasher13`.
 pub(crate) fn hash13(elements: &[Field]) -> ProofResult<Field> {
-    if elements.len() != 13 {
-        return Err(ProofError::InvalidLength {
-            name: "Hasher13",
-            expected: 13,
-            actual: elements.len(),
-        });
-    }
-    let h1 = poseidon(&elements[0..5]);
-    let h2 = poseidon(&elements[5..10]);
-    Ok(poseidon(&[
-        h1,
-        h2,
-        elements[10].clone(),
-        elements[11].clone(),
-        elements[12].clone(),
-    ]))
+    hash_message_13(elements)
 }

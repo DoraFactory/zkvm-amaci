@@ -1,0 +1,6 @@
+[patch.crates-io]
+# SP1 patched crates route supported crypto operations through SP1
+# precompiles in the SP1 guest. Use with:
+#   cargo --config configs/cargo-sp1-native-patches.toml ...
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
+curve25519-dalek = { git = "https://github.com/sp1-patches/curve25519-dalek", tag = "patch-4.1.3-sp1-6.0.0" }

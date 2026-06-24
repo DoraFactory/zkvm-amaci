@@ -5,10 +5,10 @@ use crate::crypto::{
     verify_command_signature,
 };
 use crate::error::{ProofError, ProofResult};
+use crate::hash_backend::hash_fields;
 use crate::merkle::{check_inclusion, root_from_path, state_leaf_hash};
 use crate::public_output::ProcessDeactivatePublicOutput;
 use crate::types::ProcessDeactivateInput;
-use maci_crypto::poseidon;
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
@@ -320,8 +320,8 @@ fn process_one(
         &input.coord_priv_key,
         &[state_leaf[0].clone(), state_leaf[1].clone()],
     );
-    let shared_key_hash = poseidon(&shared_key);
-    let deactivate_leaf_hash = poseidon(&[
+    let shared_key_hash = hash_fields(&shared_key);
+    let deactivate_leaf_hash = hash_fields(&[
         input.c1[i][0].clone(),
         input.c1[i][1].clone(),
         input.c2[i][0].clone(),

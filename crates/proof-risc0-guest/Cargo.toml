@@ -9,6 +9,7 @@ risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"],
 
 [features]
 risc0 = ["dep:risc0-zkvm"]
+zkvm-native-crypto = ["amaci-proof-core/zkvm-native-crypto"]
 
 [[bin]]
 name = "amaci-proof-risc0-guest"

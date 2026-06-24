@@ -13,6 +13,15 @@ use crate::public_output::ProcessMessagesPublicOutput;
 use crate::types::ProcessMessagesInput;
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
+use std::sync::OnceLock;
+
+static MAX_VOTE_WEIGHT: OnceLock<Field> = OnceLock::new();
+
+fn max_vote_weight() -> &'static Field {
+    MAX_VOTE_WEIGHT.get_or_init(|| {
+        BigUint::parse_bytes(b"147946756881789319005730692170996259609", 10).unwrap()
+    })
+}
 
 /// Mirrors `amaci/power/processMessages.circom::ProcessMessages`.
 pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPublicOutput> {
@@ -332,7 +341,7 @@ fn process_one(
         &input.current_vote_weights_path_elements[i],
     )?;
 
-    let mut new_state_leaf = vec![BigUint::from(0u32); 10];
+    let mut new_state_leaf: [Field; 10] = std::array::from_fn(|_| BigUint::from(0u32));
     new_state_leaf[0] = transform.new_pub_key[0].clone();
     new_state_leaf[1] = transform.new_pub_key[1].clone();
     new_state_leaf[2] = if transform.is_valid {
@@ -431,9 +440,7 @@ fn message_validator(
     } else {
         false
     };
-    let max_vote_weight =
-        BigUint::parse_bytes(b"147946756881789319005730692170996259609", 10).unwrap();
-    let vote_weight_ok = command.new_vote_weight <= max_vote_weight;
+    let vote_weight_ok = &command.new_vote_weight <= max_vote_weight();
 
     let is_quad = packed.is_quadratic_cost == BigUint::one();
     let current_cost = if is_quad {
@@ -492,11 +499,14 @@ pub fn message_chain(
             EmptyRule::Message0 => msg[0].is_zero(),
         };
         if !is_empty {
-            let mut hash_input = Vec::with_capacity(13);
-            hash_input.extend_from_slice(msg);
-            hash_input.push(enc_pub_key[0].clone());
-            hash_input.push(enc_pub_key[1].clone());
-            hash_input.push(current);
+            let previous = current;
+            let hash_input: [Field; 13] = std::array::from_fn(|idx| match idx {
+                0..=9 => msg[idx].clone(),
+                10 => enc_pub_key[0].clone(),
+                11 => enc_pub_key[1].clone(),
+                12 => previous.clone(),
+                _ => unreachable!("Hasher13 has exactly 13 inputs"),
+            });
             current = hash13(&hash_input)?;
         }
     }

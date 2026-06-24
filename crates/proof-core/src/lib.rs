@@ -9,9 +9,11 @@ pub mod crypto;
 pub mod error;
 pub mod execute;
 pub mod field;
+pub mod hash_backend;
 pub mod merkle;
 pub mod packing;
 pub mod public_output;
+pub mod sample_inputs;
 pub mod types;
 
 pub use error::{ProofError, ProofResult};

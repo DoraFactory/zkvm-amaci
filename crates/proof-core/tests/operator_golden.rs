@@ -1,3 +1,5 @@
+#![cfg(not(feature = "zkvm-native-crypto"))]
+
 use amaci_proof_core::{
     execute_proof_logic, AddNewKeyInput, ProcessDeactivateInput, ProcessMessagesInput, ProofError,
     ProverInput, PublicOutput, TallyVotesInput,

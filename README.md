@@ -21,6 +21,7 @@ Current built-in zkVM host inputs:
 
 - `process-messages-2-1-5`
 - `tally-votes-2-1-1`
+- `process-messages-native-1-1` when built with `--features zkvm-native-crypto`
 
 The remaining AMACI circuits are implemented in `proof-core`, but their built-in zkVM prover inputs are not wired into the host CLIs yet.
 
@@ -42,6 +43,7 @@ zkvm-amaci/
     risc0_proving_runbook.md
     sp1_proving_runbook.md
     circom_to_rust_migration_map.md
+    zkvm_optimization_notes.md
     testing_plan.md
 ```
 
@@ -65,6 +67,52 @@ read ProverInput -> execute proof-core -> commit PublicOutput
 
 This keeps the RISC Zero and SP1 adapters thin and avoids duplicating circuit logic per zkVM.
 
+## Crypto Backends
+
+The default build is Circom-compatible and keeps the original Poseidon-based
+commitments and Merkle hashes.
+
+The `zkvm-native-crypto` feature keeps the same AMACI protocol flow but switches
+protocol-level commitments, Merkle hashes, message chains, and public input
+hashes to domain-separated SHA-256 field hashes. This mode is intended for zkVM
+performance work and is not byte-compatible with the Circom fixtures.
+
+In native mode, public keys are stored as full 32-byte `[Ed25519 verifying key,
+X25519 public key]` values. Command signatures are Ed25519 signatures stored
+across `sig_r8[0]`, `sig_r8[1]`, and `sig_s` as 22/21/21-byte chunks. Shared
+keys are derived with X25519, and message payload encryption/decryption uses a
+SHA-256 XOR keystream helper. Non-empty native witnesses must be generated with
+the native helpers, not with the Circom Poseidon/BabyJubJub tooling.
+
+RISC Zero and SP1 use different patched crypto crate sources, so the workspace
+does not globally patch `sha2` or `curve25519-dalek`. Use the backend-specific
+Cargo config files when you want guest builds to route SHA-256/Curve25519
+through zkVM precompiles:
+
+```bash
+cargo --config configs/cargo-risc0-native-patches.toml ...
+cargo --config configs/cargo-sp1-native-patches.toml ...
+```
+
+Check the native backend:
+
+```bash
+cargo test -p amaci-proof-core --features zkvm-native-crypto
+cargo check -p amaci-proof-risc0-host --features zkvm-native-crypto
+cargo check -p amaci-proof-sp1-host --features zkvm-native-crypto
+
+RISC0_DEV_MODE=1 CARGO_TARGET_DIR=/tmp/zkvm-amaci-native-target \
+  cargo run -p amaci-proof-risc0-host --features zkvm-native-crypto -- \
+    process-messages-native-2-1-5
+```
+
+Profile the native core logic without proving:
+
+```bash
+cargo run --release -p amaci-proof-core --features zkvm-native-crypto \
+  --bin native_profile -- process-messages-native-2-1-5 --iters 100
+```
+
 ## RISC Zero
 
 Install the RISC Zero toolchain:
@@ -85,6 +133,19 @@ RISC0_DEV_MODE=0 CARGO_TARGET_DIR=/tmp/zkvm-amaci-target \
   cargo run --release -p amaci-proof-risc0-host -- prove process-messages-2-1-5 \
     --receipt proofs/process-messages-2-1-5.receipt.bin \
     --public proofs/process-messages-2-1-5.public.json
+```
+
+Generate a RISC Zero receipt with the zkVM-native crypto backend:
+
+```bash
+mkdir -p proofs
+
+RISC0_DEV_MODE=0 CARGO_TARGET_DIR=/tmp/zkvm-amaci-native-target \
+  cargo --config configs/cargo-risc0-native-patches.toml run --release \
+    -p amaci-proof-risc0-host --features zkvm-native-crypto -- \
+    prove process-messages-native-2-1-5 \
+    --receipt proofs/process-messages-native-2-1-5.receipt.bin \
+    --public proofs/process-messages-native-2-1-5.public.json
 ```
 
 Verify the saved receipt without proving again:
@@ -139,6 +200,37 @@ CARGO_TARGET_DIR=/tmp/zkvm-amaci-target \
     --public sp1-proofs/process-messages-2-1-5.public.json
 ```
 
+Generate an SP1 proof with the zkVM-native crypto backend:
+
+```bash
+mkdir -p sp1-proofs
+
+CARGO_TARGET_DIR=/tmp/zkvm-amaci-native-target \
+  cargo --config configs/cargo-sp1-native-patches.toml run --release \
+    -p amaci-proof-sp1-host --features zkvm-native-crypto -- \
+    prove process-messages-native-2-1-5 \
+    --proof sp1-proofs/process-messages-native-2-1-5.sp1-proof.bin \
+    --public sp1-proofs/process-messages-native-2-1-5.public.json
+```
+
+Execute the SP1 guest without proving and print the execution report:
+
+```bash
+CARGO_TARGET_DIR=/tmp/zkvm-amaci-native-target \
+  cargo --config configs/cargo-sp1-native-patches.toml run \
+    -p amaci-proof-sp1-host --features zkvm-native-crypto -- \
+    execute process-messages-native-2-1-5 \
+    --public sp1-proofs/process-messages-native-2-1-5.execute-public.json
+```
+
+Expected execute output includes:
+
+```text
+execute ok
+instructions=...
+gas=...
+```
+
 Verify the saved proof without proving again:
 
 ```bash
@@ -180,8 +272,10 @@ SP1 host builds require the Succinct `succinct` Rust toolchain installed by `sp1
 
 ## Important Limits
 
-- The current guest logic uses `num-bigint`, arkworks, Poseidon, and BabyJubJub-compatible Rust implementations. It prioritizes Circom equivalence and auditability over zkVM performance.
-- The RISC Zero and SP1 proof CLIs currently expose built-in inputs for `process-messages-2-1-5` and `tally-votes-2-1-1`.
+- The default Circom-compatible guest logic still uses `num-bigint`, arkworks, Poseidon, and BabyJubJub-compatible Rust implementations, with low-risk zkVM-friendly allocation and constant-cache optimizations applied.
+- The native backend replaces protocol hashes, command signatures, key agreement, and message encryption for the currently wired native sample path. The Rust representation is still `BigUint`, and native public-key/message words may use the full 256-bit byte range instead of staying below the BN254 scalar field.
+- `zkvm-native-crypto` changes protocol hash outputs and therefore changes image IDs, public outputs, and proof artifacts. Do not compare native-mode outputs against Circom golden fixtures.
+- The RISC Zero and SP1 proof CLIs currently expose built-in inputs for `process-messages-2-1-5`, `tally-votes-2-1-1`, and native-mode `process-messages-native-1-1` / `process-messages-native-2-1-5`.
 - Local verifier closure is implemented for both zkVMs, but this is not yet a CosmWasm/on-chain verifier integration.
 - SP1 currently uses core proof mode. Compressed, Groth16, and Plonk modes are intentionally deferred until the chain-facing verifier target is selected.
 
@@ -191,4 +285,5 @@ SP1 host builds require the Succinct `succinct` Rust toolchain installed by `sp1
 - [SP1 proving runbook](docs/sp1_proving_runbook.md)
 - [Circom to Rust migration map](docs/circom_to_rust_migration_map.md)
 - [RISC Zero and SP1 adapter boundary](docs/risc0_sp1_adapter_boundary.md)
+- [zkVM optimization notes](docs/zkvm_optimization_notes.md)
 - [Testing plan](docs/testing_plan.md)

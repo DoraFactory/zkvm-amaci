@@ -6,5 +6,9 @@ edition = "2021"
 [build-dependencies]
 risc0-build = "=3.0.5"
 
+[features]
+default = []
+zkvm-native-crypto = []
+
 [package.metadata.risc0]
 methods = ["../proof-risc0-guest"]

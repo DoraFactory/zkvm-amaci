@@ -1,11 +1,14 @@
 use crate::error::{ProofError, ProofResult};
 use crate::field::{pow5, Field};
+use crate::hash_backend::{hash_quin, hash_state_leaf};
 use crate::packing::path_index_at;
-use maci_crypto::{hash10, hash5};
 use num_bigint::BigUint;
+use std::sync::{Mutex, OnceLock};
 
 pub const QUIN_ARITY: usize = 5;
 pub const QUIN_SIBLINGS: usize = QUIN_ARITY - 1;
+
+static ZERO_ROOTS: OnceLock<Mutex<Vec<Field>>> = OnceLock::new();
 
 pub fn hash5_exact(children: &[Field]) -> ProofResult<Field> {
     if children.len() != QUIN_ARITY {
@@ -15,27 +18,30 @@ pub fn hash5_exact(children: &[Field]) -> ProofResult<Field> {
             actual: children.len(),
         });
     }
-    Ok(hash5(children)?)
+    hash_quin(children)
 }
 
 pub fn hash10_exact(values: &[Field]) -> ProofResult<Field> {
-    if values.len() != 10 {
-        return Err(ProofError::InvalidLength {
-            name: "state leaf",
-            expected: 10,
-            actual: values.len(),
-        });
-    }
-    Ok(hash10(values)?)
+    hash_state_leaf(values)
 }
 
 /// Mirrors `utils/trees/zeroRoot.circom::ZeroRoot`.
 pub fn zero_root(depth: usize) -> ProofResult<Field> {
-    let mut current = BigUint::from(0u32);
-    for _ in 0..depth {
-        current = hash5_exact(&vec![current; QUIN_ARITY])?;
+    let roots = ZERO_ROOTS.get_or_init(|| Mutex::new(vec![BigUint::from(0u32)]));
+    let mut roots = roots
+        .lock()
+        .map_err(|_| ProofError::Crypto("zero root cache lock poisoned".to_string()))?;
+
+    while roots.len() <= depth {
+        let previous = roots
+            .last()
+            .expect("zero root cache is never empty")
+            .clone();
+        let children: [Field; QUIN_ARITY] = std::array::from_fn(|_| previous.clone());
+        roots.push(hash5_exact(&children)?);
     }
-    Ok(current)
+
+    Ok(roots[depth].clone())
 }
 
 /// Mirrors `utils/trees/incrementalQuinTree.circom::QuinTreeInclusionProof`.
@@ -54,16 +60,16 @@ pub fn root_from_path(
             });
         }
         let idx = path_index_at(leaf_index, level, QUIN_ARITY);
-        let mut children = Vec::with_capacity(QUIN_ARITY);
         let mut sibling_idx = 0;
-        for child_idx in 0..QUIN_ARITY {
+        let children: [Field; QUIN_ARITY] = std::array::from_fn(|child_idx| {
             if child_idx == idx {
-                children.push(current.clone());
+                current.clone()
             } else {
-                children.push(siblings[sibling_idx].clone());
+                let sibling = siblings[sibling_idx].clone();
                 sibling_idx += 1;
+                sibling
             }
-        }
+        });
         current = hash5_exact(&children)?;
     }
     Ok(current)
