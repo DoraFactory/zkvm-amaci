@@ -1,8 +1,11 @@
-use amaci_proof_core::{execute_proof_logic, ProverInput};
+use amaci_proof_core::{codec::decode_input, execute_proof_logic};
 use risc0_zkvm::guest::env;
 
 fn main() {
-    let input: ProverInput = env::read();
+    let len: u32 = env::read();
+    let mut input_bytes = vec![0u8; len as usize];
+    env::read_slice(&mut input_bytes);
+    let input = decode_input(&input_bytes).expect("AMACI input decode failed");
     let output = execute_proof_logic(&input).expect("AMACI proof logic failed");
     env::commit(&output);
 }

@@ -96,5 +96,5 @@ fn input_hash(input: &ProverInput) -> &amaci_proof_core::Field {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  cargo run --release -p amaci-proof-core --features zkvm-native-crypto --bin native_profile -- [circuit] [--iters N]"
+    "usage:\n  cargo run --release -p amaci-proof-core --bin native_profile -- [circuit] [--iters N]"
 }

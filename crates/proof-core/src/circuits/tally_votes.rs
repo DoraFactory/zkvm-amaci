@@ -1,26 +1,33 @@
-use crate::circuits::{assert_input_hash, poseidon2};
+use crate::circuits::{assert_input_hash, hash2};
 use crate::error::{ProofError, ProofResult};
 use crate::field::{pow5, Field};
 use crate::hash_backend::hash_pair;
-use crate::merkle::{check_inclusion, check_root, state_leaf_hash, zero_root};
+use crate::merkle::{
+    check_inclusion_digest, check_root, check_root_digest, state_leaf_hash_digest, zero_root,
+};
+use crate::native_types::field_to_digest;
 use crate::packing::unpack_tally_packed_vals;
-use crate::public_output::TallyVotesPublicOutput;
-use crate::types::TallyVotesInput;
-use num_bigint::BigUint;
-use num_traits::Zero;
+use crate::public_output::{public_value, TallyVotesPublicOutput};
+use crate::types::{TallyVotesInput, VoteRow, VOTE_ROW_WORDS};
 
-/// Mirrors `amaci/power/tallyVotes.circom::TallyVotes`.
 pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
     if input.int_state_tree_depth >= input.state_tree_depth {
         return Err(ProofError::InvalidRange {
             name: "intStateTreeDepth",
-            value: BigUint::from(input.int_state_tree_depth),
-            max: BigUint::from(input.state_tree_depth - 1),
+            value: Field::from(input.int_state_tree_depth),
+            max: Field::from(input.state_tree_depth - 1),
         });
     }
 
     let batch_size = pow5(5, input.int_state_tree_depth);
     let num_vote_options = pow5(5, input.vote_option_tree_depth);
+    if num_vote_options != VOTE_ROW_WORDS {
+        return Err(ProofError::InvalidLength {
+            name: "vote option row width",
+            expected: VOTE_ROW_WORDS,
+            actual: num_vote_options,
+        });
+    }
     if input.state_leaf.len() != batch_size {
         return Err(ProofError::InvalidLength {
             name: "stateLeaf",
@@ -43,7 +50,7 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
         });
     }
 
-    let state_commitment = poseidon2(&input.state_root, &input.state_salt);
+    let state_commitment = hash2(&input.state_root, &input.state_salt);
     if state_commitment != input.state_commitment {
         return Err(ProofError::CommitmentMismatch {
             name: "stateCommitment",
@@ -53,7 +60,7 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
     }
 
     let packed = unpack_tally_packed_vals(&input.packed_vals)?;
-    let batch_start_index = &packed.batch_num * BigUint::from(batch_size);
+    let batch_start_index = &packed.batch_num * Field::from(batch_size);
     if batch_start_index > packed.num_sign_ups {
         return Err(ProofError::InvalidRange {
             name: "batchStartIndex",
@@ -64,27 +71,20 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
 
     let mut state_leaf_hashes = Vec::with_capacity(batch_size);
     for row in &input.state_leaf {
-        state_leaf_hashes.push(state_leaf_hash(row)?);
+        state_leaf_hashes.push(state_leaf_hash_digest(row)?);
     }
-    let state_subroot = check_root(&state_leaf_hashes, input.int_state_tree_depth)?;
+    let state_subroot = check_root_digest(&state_leaf_hashes, input.int_state_tree_depth)?;
     let batch_num = packed.batch_num.clone();
-    check_inclusion(
+    check_inclusion_digest(
         "state subtree",
         &state_subroot,
         &batch_num,
         &input.state_path_elements,
-        &input.state_root,
+        &field_to_digest(&input.state_root),
     )?;
 
     let vo_zero_root = zero_root(input.vote_option_tree_depth)?;
     for (i, (state, votes)) in input.state_leaf.iter().zip(input.votes.iter()).enumerate() {
-        if votes.len() != num_vote_options {
-            return Err(ProofError::InvalidLength {
-                name: "vote row",
-                expected: num_vote_options,
-                actual: votes.len(),
-            });
-        }
         let vote_root = check_root(votes, input.vote_option_tree_depth)?;
         let state_vo_root = state[3].clone();
         let expected_vote_root = if state_vo_root.is_zero() {
@@ -104,9 +104,9 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
 
     let is_first_batch = batch_start_index.is_zero();
     let current_results_root = check_root(&input.current_results, input.vote_option_tree_depth)?;
-    let current_tally_hash = poseidon2(&current_results_root, &input.current_results_root_salt);
+    let current_tally_hash = hash2(&current_results_root, &input.current_results_root_salt);
     let expected_current_tally = if is_first_batch {
-        BigUint::from(0u32)
+        Field::from(0u32)
     } else {
         current_tally_hash
     };
@@ -145,24 +145,23 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
     )?;
 
     Ok(TallyVotesPublicOutput {
-        input_hash: input.input_hash.clone(),
-        packed_vals: input.packed_vals.clone(),
-        state_commitment: input.state_commitment.clone(),
-        current_tally_commitment: input.current_tally_commitment.clone(),
-        new_tally_commitment: input.new_tally_commitment.clone(),
+        input_hash: public_value(&input.input_hash),
+        packed_vals: public_value(&input.packed_vals),
+        state_commitment: public_value(&input.state_commitment),
+        current_tally_commitment: public_value(&input.current_tally_commitment),
+        new_tally_commitment: public_value(&input.new_tally_commitment),
     })
 }
 
-/// Mirrors the result accumulation and `ResultCommitmentVerifier` inputs.
 fn tally_results(
     current_results: &[Field],
-    votes: &[Vec<Field>],
+    votes: &[VoteRow],
     is_first_batch: bool,
     num_vote_options: usize,
 ) -> Vec<Field> {
-    let max_votes = BigUint::from(10u32).pow(24);
+    let max_votes = Field::from(10u32).pow(Field::from(24u32));
     let mut out = if is_first_batch {
-        vec![BigUint::from(0u32); num_vote_options]
+        vec![Field::from(0u32); num_vote_options]
     } else {
         current_results.to_vec()
     };

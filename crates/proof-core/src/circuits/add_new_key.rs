@@ -1,14 +1,11 @@
 use crate::circuits::{assert_input_hash, coord_pub_key_hash};
-use crate::crypto::ecdh_formatted_priv_key;
+use crate::crypto::{ecdh_formatted_priv_key, native_rerandomize_ciphertext};
 use crate::error::{ProofError, ProofResult};
 use crate::hash_backend::{hash_fields, hash_pair};
 use crate::merkle::check_inclusion;
-use crate::public_output::AddNewKeyPublicOutput;
+use crate::public_output::{public_value, AddNewKeyPublicOutput};
 use crate::types::AddNewKeyInput;
-use maci_crypto::{rerandomize_ciphertext, Ciphertext};
-use num_bigint::BigUint;
 
-/// Mirrors `amaci/power/addNewKey.circom::AddNewKey`.
 pub fn execute(input: &AddNewKeyInput) -> ProofResult<AddNewKeyPublicOutput> {
     let expected_nullifier = hash_pair(&input.old_private_key, &input.poll_id);
     if expected_nullifier != input.nullifier {
@@ -44,26 +41,23 @@ pub fn execute(input: &AddNewKeyInput) -> ProofResult<AddNewKeyPublicOutput> {
         &input.deactivate_root,
     )?;
 
-    let rerandomized = rerandomize_ciphertext(
+    let (expected_d1, expected_d2) = native_rerandomize_ciphertext(
         &input.coord_pub_key,
-        &Ciphertext {
-            c1: input.c1.clone(),
-            c2: input.c2.clone(),
-            x_increment: BigUint::from(0u32),
-        },
-        Some(input.random_val.clone()),
-    )?;
-    if rerandomized.c1 != input.d1 {
+        &input.c1,
+        &input.c2,
+        &input.random_val,
+    );
+    if expected_d1 != input.d1 {
         return Err(ProofError::CommitmentMismatch {
             name: "d1",
-            expected: hash_fields(&rerandomized.c1),
+            expected: hash_fields(&expected_d1),
             actual: hash_fields(&input.d1),
         });
     }
-    if rerandomized.c2 != input.d2 {
+    if expected_d2 != input.d2 {
         return Err(ProofError::CommitmentMismatch {
             name: "d2",
-            expected: hash_fields(&rerandomized.c2),
+            expected: hash_fields(&expected_d2),
             actual: hash_fields(&input.d2),
         });
     }
@@ -86,13 +80,13 @@ pub fn execute(input: &AddNewKeyInput) -> ProofResult<AddNewKeyPublicOutput> {
     )?;
 
     Ok(AddNewKeyPublicOutput {
-        input_hash: input.input_hash.clone(),
-        deactivate_root: input.deactivate_root.clone(),
-        coord_pub_key_hash: coord_hash,
-        nullifier: input.nullifier.clone(),
-        d1: input.d1.clone(),
-        d2: input.d2.clone(),
-        new_pub_key_hash,
-        poll_id: input.poll_id.clone(),
+        input_hash: public_value(&input.input_hash),
+        deactivate_root: public_value(&input.deactivate_root),
+        coord_pub_key_hash: public_value(&coord_hash),
+        nullifier: public_value(&input.nullifier),
+        d1: [public_value(&input.d1[0]), public_value(&input.d1[1])],
+        d2: [public_value(&input.d2[0]), public_value(&input.d2[1])],
+        new_pub_key_hash: public_value(&new_pub_key_hash),
+        poll_id: public_value(&input.poll_id),
     })
 }

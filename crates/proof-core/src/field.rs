@@ -1,9 +1,8 @@
 use crate::error::{ProofError, ProofResult};
-use maci_crypto::SNARK_FIELD_SIZE;
-use num_bigint::BigUint;
 use num_traits::{One, Zero};
+use ruint::aliases::U256;
 
-pub type Field = BigUint;
+pub type Field = U256;
 
 pub fn zero() -> Field {
     Field::zero()
@@ -13,24 +12,24 @@ pub fn one() -> Field {
     Field::one()
 }
 
-pub fn field(value: impl Into<Field>) -> Field {
-    value.into() % &*SNARK_FIELD_SIZE
+pub fn field(value: u128) -> Field {
+    Field::from(value)
 }
 
 pub fn add(a: &Field, b: &Field) -> Field {
-    (a + b) % &*SNARK_FIELD_SIZE
+    *a + *b
 }
 
 pub fn sub(a: &Field, b: &Field) -> Field {
     if a >= b {
-        (a - b) % &*SNARK_FIELD_SIZE
+        *a - *b
     } else {
-        (&*SNARK_FIELD_SIZE - ((b - a) % &*SNARK_FIELD_SIZE)) % &*SNARK_FIELD_SIZE
+        Field::zero()
     }
 }
 
 pub fn mul(a: &Field, b: &Field) -> Field {
-    (a * b) % &*SNARK_FIELD_SIZE
+    *a * *b
 }
 
 pub fn pow5(base: usize, exp: usize) -> usize {

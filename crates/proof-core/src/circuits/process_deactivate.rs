@@ -1,18 +1,20 @@
 use crate::circuits::process_messages::{message_chain, EmptyRule};
-use crate::circuits::{assert_input_hash, coord_pub_key_hash, poseidon2};
+use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash2};
 use crate::crypto::{
-    ecdh_formatted_priv_key, elgamal_decrypt_x_and_odd, private_to_pub_key,
+    decrypt_deactivation_flag, ecdh_formatted_priv_key, private_to_pub_key,
     verify_command_signature,
 };
 use crate::error::{ProofError, ProofResult};
+use crate::field::Field;
 use crate::hash_backend::hash_fields;
-use crate::merkle::{check_inclusion, root_from_path, state_leaf_hash};
-use crate::public_output::ProcessDeactivatePublicOutput;
+use crate::merkle::{
+    check_inclusion, check_inclusion_digest, root_from_path, state_leaf_hash_digest,
+};
+use crate::native_types::field_to_digest;
+use crate::public_output::{public_value, ProcessDeactivatePublicOutput};
 use crate::types::ProcessDeactivateInput;
-use num_bigint::BigUint;
-use num_traits::{One, Zero};
+use num_traits::One;
 
-/// Mirrors `amaci/power/processDeactivate.circom::ProcessDeactivateMessages`.
 pub fn execute(input: &ProcessDeactivateInput) -> ProofResult<ProcessDeactivatePublicOutput> {
     if input.msgs.len() != input.batch_size {
         return Err(ProofError::InvalidLength {
@@ -30,7 +32,7 @@ pub fn execute(input: &ProcessDeactivateInput) -> ProofResult<ProcessDeactivateP
     }
     validate_batch_witness_lengths(input)?;
 
-    let current = poseidon2(
+    let current = hash2(
         &input.current_active_state_root,
         &input.current_deactivate_root,
     );
@@ -46,8 +48,8 @@ pub fn execute(input: &ProcessDeactivateInput) -> ProofResult<ProcessDeactivateP
     if derived != input.coord_pub_key {
         return Err(ProofError::CommitmentMismatch {
             name: "coordPubKey",
-            expected: poseidon2(&derived[0], &derived[1]),
-            actual: poseidon2(&input.coord_pub_key[0], &input.coord_pub_key[1]),
+            expected: hash2(&derived[0], &derived[1]),
+            actual: hash2(&input.coord_pub_key[0], &input.coord_pub_key[1]),
         });
     }
 
@@ -87,7 +89,7 @@ pub fn execute(input: &ProcessDeactivateInput) -> ProofResult<ProcessDeactivateP
             actual: deactivate_root,
         });
     }
-    let expected_new_commitment = poseidon2(&active_root, &input.new_deactivate_root);
+    let expected_new_commitment = hash2(&active_root, &input.new_deactivate_root);
     if expected_new_commitment != input.new_deactivate_commitment {
         return Err(ProofError::CommitmentMismatch {
             name: "newDeactivateCommitment",
@@ -97,15 +99,15 @@ pub fn execute(input: &ProcessDeactivateInput) -> ProofResult<ProcessDeactivateP
     }
 
     Ok(ProcessDeactivatePublicOutput {
-        input_hash: input.input_hash.clone(),
-        new_deactivate_root: input.new_deactivate_root.clone(),
-        coord_pub_key_hash: coord_hash,
-        batch_start_hash: input.batch_start_hash.clone(),
-        batch_end_hash: input.batch_end_hash.clone(),
-        current_deactivate_commitment: input.current_deactivate_commitment.clone(),
-        new_deactivate_commitment: input.new_deactivate_commitment.clone(),
-        current_state_root: input.current_state_root.clone(),
-        expected_poll_id: input.expected_poll_id.clone(),
+        input_hash: public_value(&input.input_hash),
+        new_deactivate_root: public_value(&input.new_deactivate_root),
+        coord_pub_key_hash: public_value(&coord_hash),
+        batch_start_hash: public_value(&input.batch_start_hash),
+        batch_end_hash: public_value(&input.batch_end_hash),
+        current_deactivate_commitment: public_value(&input.current_deactivate_commitment),
+        new_deactivate_commitment: public_value(&input.new_deactivate_commitment),
+        current_state_root: public_value(&input.current_state_root),
+        expected_poll_id: public_value(&input.expected_poll_id),
     })
 }
 
@@ -140,7 +142,7 @@ fn validate_batch_witness_lengths(input: &ProcessDeactivateInput) -> ProofResult
     Ok(())
 }
 
-fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(BigUint, BigUint)> {
+fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(Field, Field)> {
     let mut active_root = input.current_active_state_root.clone();
     let mut deactivate_root = input.current_deactivate_root.clone();
     let deactivate_tree_depth = input.state_tree_depth + 2;
@@ -149,7 +151,7 @@ fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(BigUint, BigUin
         let is_empty = input.msgs[i][0].is_zero();
         let command = if is_empty {
             DeactivateCommand::empty(
-                &(BigUint::from(5usize.pow(input.state_tree_depth as u32)) - BigUint::one()),
+                &(Field::from(5usize.pow(input.state_tree_depth as u32)) - Field::one()),
             )
         } else {
             decrypt_deactivate_command(input, i)?
@@ -172,30 +174,25 @@ fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(BigUint, BigUin
 
 #[derive(Debug, Clone)]
 struct DeactivateCommand {
-    state_index: BigUint,
-    poll_id: BigUint,
-    sig_r8: [BigUint; 2],
-    sig_s: BigUint,
-    packed_command: [BigUint; 3],
+    state_index: Field,
+    poll_id: Field,
+    sig_r8: [Field; 2],
+    sig_s: Field,
+    packed_command: [Field; 3],
 }
 
 impl DeactivateCommand {
-    fn empty(state_index: &BigUint) -> Self {
+    fn empty(state_index: &Field) -> Self {
         Self {
             state_index: state_index.clone(),
-            poll_id: BigUint::from(0u32),
-            sig_r8: [BigUint::from(0u32), BigUint::from(0u32)],
-            sig_s: BigUint::from(0u32),
-            packed_command: [
-                BigUint::from(0u32),
-                BigUint::from(0u32),
-                BigUint::from(0u32),
-            ],
+            poll_id: Field::from(0u32),
+            sig_r8: [Field::from(0u32), Field::from(0u32)],
+            sig_s: Field::from(0u32),
+            packed_command: [Field::from(0u32), Field::from(0u32), Field::from(0u32)],
         }
     }
 }
 
-/// Reuses `utils/messageToCommand.circom::MessageToCommand` for deactivate commands.
 fn decrypt_deactivate_command(
     input: &ProcessDeactivateInput,
     i: usize,
@@ -214,25 +211,16 @@ fn decrypt_deactivate_command(
     })
 }
 
-/// Mirrors one forward iteration of `ProcessDeactivateMessages`.
 fn process_one(
     input: &ProcessDeactivateInput,
     i: usize,
     deactivate_tree_depth: usize,
-    current_active_state_root: &BigUint,
-    current_deactivate_root: &BigUint,
+    current_active_state_root: &Field,
+    current_deactivate_root: &Field,
     command: &DeactivateCommand,
     is_empty: bool,
-) -> ProofResult<(BigUint, BigUint)> {
+) -> ProofResult<(Field, Field)> {
     let state_leaf = &input.current_state_leaves[i];
-    if state_leaf.len() != 10 {
-        return Err(ProofError::InvalidLength {
-            name: "deactivate state leaf",
-            expected: 10,
-            actual: state_leaf.len(),
-        });
-    }
-
     let poll_ok = command.poll_id == input.expected_poll_id;
     let sig_ok = if !is_empty && poll_ok {
         verify_command_signature(
@@ -245,7 +233,7 @@ fn process_one(
         false
     };
     let current_is_odd = if sig_ok && poll_ok {
-        elgamal_decrypt_x_and_odd(
+        decrypt_deactivation_flag(
             &[state_leaf[5].clone(), state_leaf[6].clone()],
             &[state_leaf[7].clone(), state_leaf[8].clone()],
             &input.coord_priv_key,
@@ -256,28 +244,28 @@ fn process_one(
     };
     let valid = sig_ok && !current_is_odd && poll_ok;
 
-    let max_index = BigUint::from(5usize.pow(input.state_tree_depth as u32));
+    let max_index = Field::from(5usize.pow(input.state_tree_depth as u32));
     let index_for_state = if command.state_index <= max_index {
         command.state_index.clone()
     } else {
-        &max_index - BigUint::one()
+        &max_index - Field::one()
     };
-    let state_hash = state_leaf_hash(state_leaf)?;
-    check_inclusion(
+    let state_hash = state_leaf_hash_digest(state_leaf)?;
+    check_inclusion_digest(
         "deactivate state leaf",
         &state_hash,
         &index_for_state,
         &input.current_state_leaves_path_elements[i],
-        &input.current_state_root,
+        &field_to_digest(&input.current_state_root),
     )?;
 
     let new_status_is_odd =
-        elgamal_decrypt_x_and_odd(&input.c1[i], &input.c2[i], &input.coord_priv_key)?.1;
+        decrypt_deactivation_flag(&input.c1[i], &input.c2[i], &input.coord_priv_key)?.1;
     if valid != !new_status_is_odd {
         return Err(ProofError::CommitmentMismatch {
             name: "deactivate status parity",
-            expected: BigUint::from(valid as u32),
-            actual: BigUint::from((!new_status_is_odd) as u32),
+            expected: Field::from(valid as u32),
+            actual: Field::from((!new_status_is_odd) as u32),
         });
     }
 
@@ -285,7 +273,7 @@ fn process_one(
         return Err(ProofError::InvalidRange {
             name: "newActiveState",
             value: input.new_active_state[i].clone(),
-            max: BigUint::from(0u32),
+            max: Field::from(0u32),
         });
     }
 
@@ -307,10 +295,10 @@ fn process_one(
         &input.active_state_leaves_path_elements[i],
     )?;
 
-    let deactivate_index = &input.deactivate_index0 + BigUint::from(i);
+    let deactivate_index = &input.deactivate_index0 + Field::from(i);
     check_inclusion(
         "current deactivate zero leaf",
-        &BigUint::from(0u32),
+        &Field::from(0u32),
         &deactivate_index,
         &input.deactivate_leaves_path_elements[i],
         current_deactivate_root,
@@ -329,7 +317,7 @@ fn process_one(
         shared_key_hash,
     ]);
     let new_deactivate_leaf = if is_empty {
-        BigUint::from(0u32)
+        Field::from(0u32)
     } else {
         deactivate_leaf_hash
     };

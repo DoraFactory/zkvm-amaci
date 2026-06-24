@@ -2,8 +2,16 @@ use crate::field::Field;
 use serde::{Deserialize, Serialize};
 
 pub type PubKey = [Field; 2];
-pub type Message = Vec<Field>;
-pub type PathElements = Vec<Vec<Field>>;
+pub const MESSAGE_WORDS: usize = 10;
+pub const STATE_LEAF_WORDS: usize = 10;
+
+pub type Message = [Field; MESSAGE_WORDS];
+pub type StateLeaf = [Field; STATE_LEAF_WORDS];
+pub const VOTE_ROW_WORDS: usize = 5;
+
+pub type VoteRow = [Field; VOTE_ROW_WORDS];
+pub type PathElement = [Field; 4];
+pub type PathElements = Vec<PathElement>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProverInput {
@@ -28,7 +36,7 @@ pub struct ProcessMessagesInput {
     pub msgs: Vec<Message>,
     pub enc_pub_keys: Vec<PubKey>,
     pub current_state_root: Field,
-    pub current_state_leaves: Vec<Vec<Field>>,
+    pub current_state_leaves: Vec<StateLeaf>,
     pub current_state_leaves_path_elements: Vec<PathElements>,
     pub current_state_commitment: Field,
     pub current_state_salt: Field,
@@ -55,9 +63,9 @@ pub struct TallyVotesInput {
     pub state_commitment: Field,
     pub current_tally_commitment: Field,
     pub new_tally_commitment: Field,
-    pub state_leaf: Vec<Vec<Field>>,
+    pub state_leaf: Vec<StateLeaf>,
     pub state_path_elements: PathElements,
-    pub votes: Vec<Vec<Field>>,
+    pub votes: Vec<VoteRow>,
     pub current_results: Vec<Field>,
     pub current_results_root_salt: Field,
     pub new_results_root_salt: Field,
@@ -83,7 +91,7 @@ pub struct ProcessDeactivateInput {
     pub new_active_state: Vec<Field>,
     pub deactivate_index0: Field,
     pub current_state_root: Field,
-    pub current_state_leaves: Vec<Vec<Field>>,
+    pub current_state_leaves: Vec<StateLeaf>,
     pub current_state_leaves_path_elements: Vec<PathElements>,
     pub active_state_leaves_path_elements: Vec<PathElements>,
     pub deactivate_leaves_path_elements: Vec<PathElements>,

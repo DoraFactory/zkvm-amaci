@@ -5,12 +5,14 @@
 //! commit the returned [`PublicOutput`].
 
 pub mod circuits;
+pub mod codec;
 pub mod crypto;
 pub mod error;
 pub mod execute;
 pub mod field;
 pub mod hash_backend;
 pub mod merkle;
+pub mod native_types;
 pub mod packing;
 pub mod public_output;
 pub mod sample_inputs;

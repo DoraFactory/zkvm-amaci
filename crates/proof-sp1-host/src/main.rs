@@ -1,4 +1,4 @@
-use amaci_proof_core::sample_inputs;
+use amaci_proof_core::{codec::encode_input, sample_inputs};
 use amaci_proof_core::{execute_proof_logic, ProverInput, PublicOutput};
 use sp1_sdk::blocking::{ProveRequest, Prover, ProverClient, SP1Stdin};
 use sp1_sdk::ProvingKey;
@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const AMACI_SP1_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-program");
+const DEFAULT_CIRCUIT: &str = "process-messages-native-2-1-5-full";
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -62,7 +63,7 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
         let circuit = args
             .first()
             .cloned()
-            .unwrap_or_else(|| "process-messages-2-1-5".to_string());
+            .unwrap_or_else(|| DEFAULT_CIRCUIT.to_string());
         Ok(Command::Prove {
             circuit,
             proof_path: None,
@@ -72,7 +73,7 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 }
 
 fn parse_prove_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
-    let mut circuit = "process-messages-2-1-5".to_string();
+    let mut circuit = DEFAULT_CIRCUIT.to_string();
     let mut proof_path = None;
     let mut public_path = None;
     let mut i = 0;
@@ -134,7 +135,7 @@ fn parse_verify_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 }
 
 fn parse_execute_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
-    let mut circuit = "process-messages-2-1-5".to_string();
+    let mut circuit = DEFAULT_CIRCUIT.to_string();
     let mut public_path = None;
     let mut i = 0;
 
@@ -184,7 +185,7 @@ fn prove(
     let client = ProverClient::builder().cpu().build();
     let pk = client.setup(AMACI_SP1_ELF)?;
     let mut stdin = SP1Stdin::new();
-    stdin.write(&input);
+    stdin.write_vec(encode_input(&input));
 
     let proof = client.prove(&pk, stdin).core().run()?;
     client.verify(&proof, pk.verifying_key(), None)?;
@@ -217,7 +218,7 @@ fn execute(circuit: &str, public_path: Option<&Path>) -> Result<(), Box<dyn Erro
 
     let client = ProverClient::builder().cpu().build();
     let mut stdin = SP1Stdin::new();
-    stdin.write(&input);
+    stdin.write_vec(encode_input(&input));
 
     let (public_values, report) = client.execute(AMACI_SP1_ELF, stdin).run()?;
     let journal_output = decode_public_values(public_values);

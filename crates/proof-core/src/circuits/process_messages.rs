@@ -1,29 +1,31 @@
-use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, poseidon2};
+use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, hash2};
 use crate::crypto::{
-    ecdh_formatted_priv_key, elgamal_decrypt_x_and_odd, poseidon_decrypt_without_check,
-    private_to_pub_key, verify_command_signature,
+    decrypt_deactivation_flag, decrypt_without_check, ecdh_formatted_priv_key, private_to_pub_key,
+    verify_command_signature,
 };
 use crate::error::{ProofError, ProofResult};
 use crate::field::{ensure_bool, pow5, Field};
-use crate::merkle::{check_inclusion, root_from_path, state_leaf_hash, zero_root};
-use crate::packing::{
-    uint32_to_96_circom, unpack_element_high_to_low, unpack_process_messages_packed_vals,
+use crate::merkle::{
+    check_inclusion, check_inclusion_digest, root_from_path, state_leaf_hash,
+    state_leaf_hash_digest, zero_root,
 };
-use crate::public_output::ProcessMessagesPublicOutput;
-use crate::types::ProcessMessagesInput;
-use num_bigint::BigUint;
-use num_traits::{One, Zero};
+use crate::native_types::field_to_digest;
+use crate::packing::{
+    decode_vote_weight_96, unpack_element_high_to_low, unpack_process_messages_packed_vals,
+};
+use crate::public_output::{public_value, ProcessMessagesPublicOutput};
+use crate::types::{Message, ProcessMessagesInput, StateLeaf};
+use num_traits::One;
 use std::sync::OnceLock;
 
 static MAX_VOTE_WEIGHT: OnceLock<Field> = OnceLock::new();
 
 fn max_vote_weight() -> &'static Field {
     MAX_VOTE_WEIGHT.get_or_init(|| {
-        BigUint::parse_bytes(b"147946756881789319005730692170996259609", 10).unwrap()
+        Field::from_str_radix("147946756881789319005730692170996259609", 10).unwrap()
     })
 }
 
-/// Mirrors `amaci/power/processMessages.circom::ProcessMessages`.
 pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPublicOutput> {
     if input.msgs.len() != input.batch_size {
         return Err(ProofError::InvalidLength {
@@ -44,24 +46,24 @@ pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPubli
     let packed = unpack_process_messages_packed_vals(&input.packed_vals)?;
     ensure_bool("isQuadraticCost", &packed.is_quadratic_cost)?;
 
-    let max_vote_options = BigUint::from(pow5(5, input.vote_option_tree_depth));
+    let max_vote_options = Field::from(pow5(5, input.vote_option_tree_depth));
     if packed.max_vote_options > max_vote_options {
         return Err(ProofError::InvalidRange {
             name: "maxVoteOptions",
             value: packed.max_vote_options,
-            max: BigUint::from(pow5(5, input.vote_option_tree_depth)),
+            max: Field::from(pow5(5, input.vote_option_tree_depth)),
         });
     }
-    let max_signups = BigUint::from(pow5(5, input.state_tree_depth));
+    let max_signups = Field::from(pow5(5, input.state_tree_depth));
     if packed.num_sign_ups > max_signups {
         return Err(ProofError::InvalidRange {
             name: "numSignUps",
             value: packed.num_sign_ups,
-            max: BigUint::from(pow5(5, input.state_tree_depth)),
+            max: Field::from(pow5(5, input.state_tree_depth)),
         });
     }
 
-    let current_state_commitment = poseidon2(&input.current_state_root, &input.current_state_salt);
+    let current_state_commitment = hash2(&input.current_state_root, &input.current_state_salt);
     if current_state_commitment != input.current_state_commitment {
         return Err(ProofError::CommitmentMismatch {
             name: "currentStateCommitment",
@@ -70,7 +72,7 @@ pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPubli
         });
     }
 
-    let deactivate_commitment = poseidon2(&input.active_state_root, &input.deactivate_root);
+    let deactivate_commitment = hash2(&input.active_state_root, &input.deactivate_root);
     if deactivate_commitment != input.deactivate_commitment {
         return Err(ProofError::CommitmentMismatch {
             name: "deactivateCommitment",
@@ -83,8 +85,8 @@ pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPubli
     if derived != input.coord_pub_key {
         return Err(ProofError::CommitmentMismatch {
             name: "coordPubKey",
-            expected: poseidon2(&derived[0], &derived[1]),
-            actual: poseidon2(&input.coord_pub_key[0], &input.coord_pub_key[1]),
+            expected: hash2(&derived[0], &derived[1]),
+            actual: hash2(&input.coord_pub_key[0], &input.coord_pub_key[1]),
         });
     }
 
@@ -117,7 +119,7 @@ pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPubli
     )?;
 
     let computed_new_root = process_batch(input, &packed)?;
-    let expected_new_commitment = poseidon2(&computed_new_root, &input.new_state_salt);
+    let expected_new_commitment = hash2(&computed_new_root, &input.new_state_salt);
     if expected_new_commitment != input.new_state_commitment {
         return Err(ProofError::CommitmentMismatch {
             name: "newStateCommitment",
@@ -127,15 +129,15 @@ pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPubli
     }
 
     Ok(ProcessMessagesPublicOutput {
-        input_hash: input.input_hash.clone(),
-        packed_vals: input.packed_vals.clone(),
-        coord_pub_key_hash: coord_hash,
-        batch_start_hash: input.batch_start_hash.clone(),
-        batch_end_hash: input.batch_end_hash.clone(),
-        current_state_commitment: input.current_state_commitment.clone(),
-        new_state_commitment: input.new_state_commitment.clone(),
-        deactivate_commitment: input.deactivate_commitment.clone(),
-        expected_poll_id: input.expected_poll_id.clone(),
+        input_hash: public_value(&input.input_hash),
+        packed_vals: public_value(&input.packed_vals),
+        coord_pub_key_hash: public_value(&coord_hash),
+        batch_start_hash: public_value(&input.batch_start_hash),
+        batch_end_hash: public_value(&input.batch_end_hash),
+        current_state_commitment: public_value(&input.current_state_commitment),
+        new_state_commitment: public_value(&input.new_state_commitment),
+        deactivate_commitment: public_value(&input.deactivate_commitment),
+        expected_poll_id: public_value(&input.expected_poll_id),
     })
 }
 
@@ -181,16 +183,15 @@ pub struct Command {
     pub packed_command: [Field; 3],
 }
 
-/// Mirrors `utils/messageToCommand.circom::MessageToCommand`.
 pub fn message_to_command(
-    message: &[Field],
+    message: &Message,
     enc_priv_key: &Field,
     enc_pub_key: &[Field; 2],
 ) -> ProofResult<Command> {
     let shared_key = ecdh_formatted_priv_key(enc_priv_key, enc_pub_key);
-    let decrypted = poseidon_decrypt_without_check(message, &shared_key, &BigUint::from(0u32), 7)?;
+    let decrypted = decrypt_without_check(message, &shared_key, &Field::from(0u32), 7)?;
     let unpacked = unpack_element_high_to_low(&decrypted[0], 7)?;
-    let new_vote_weight = uint32_to_96_circom(&unpacked[1], &unpacked[2], &unpacked[3])?;
+    let new_vote_weight = decode_vote_weight_96(&unpacked[1], &unpacked[2], &unpacked[3])?;
     Ok(Command {
         poll_id: unpacked[0].clone(),
         nonce: unpacked[6].clone(),
@@ -213,7 +214,7 @@ fn process_batch(
     packed: &crate::packing::ProcessMessagesPackedVals,
 ) -> ProofResult<Field> {
     let vo_tree_zero_root = zero_root(input.vote_option_tree_depth)?;
-    let mut state_roots = vec![BigUint::from(0u32); input.batch_size + 1];
+    let mut state_roots = vec![Field::from(0u32); input.batch_size + 1];
     state_roots[input.batch_size] = input.current_state_root.clone();
 
     for i in (0..input.batch_size).rev() {
@@ -242,23 +243,18 @@ fn process_batch(
 
 fn empty_command() -> Command {
     Command {
-        state_index: BigUint::from(0u32),
-        vote_option_index: BigUint::from(0u32),
-        new_vote_weight: BigUint::from(0u32),
-        nonce: BigUint::from(0u32),
-        poll_id: BigUint::from(0u32),
-        new_pub_key: [BigUint::from(0u32), BigUint::from(0u32)],
-        sig_r8: [BigUint::from(0u32), BigUint::from(0u32)],
-        sig_s: BigUint::from(0u32),
-        packed_command: [
-            BigUint::from(0u32),
-            BigUint::from(0u32),
-            BigUint::from(0u32),
-        ],
+        state_index: Field::from(0u32),
+        vote_option_index: Field::from(0u32),
+        new_vote_weight: Field::from(0u32),
+        nonce: Field::from(0u32),
+        poll_id: Field::from(0u32),
+        new_pub_key: [Field::from(0u32), Field::from(0u32)],
+        sig_r8: [Field::from(0u32), Field::from(0u32)],
+        sig_s: Field::from(0u32),
+        packed_command: [Field::from(0u32), Field::from(0u32), Field::from(0u32)],
     }
 }
 
-/// Mirrors `amaci/power/processMessages.circom::ProcessOne`.
 fn process_one(
     input: &ProcessMessagesInput,
     packed: &crate::packing::ProcessMessagesPackedVals,
@@ -268,14 +264,6 @@ fn process_one(
     command: &Command,
 ) -> ProofResult<Field> {
     let state_leaf = &input.current_state_leaves[i];
-    if state_leaf.len() != 10 {
-        return Err(ProofError::InvalidLength {
-            name: "currentStateLeaf",
-            expected: 10,
-            actual: state_leaf.len(),
-        });
-    }
-
     let transform = state_leaf_transformer(
         input,
         packed,
@@ -285,19 +273,19 @@ fn process_one(
         command,
     )?;
 
-    let max_index = BigUint::from(pow5(5, input.state_tree_depth));
+    let max_index = Field::from(pow5(5, input.state_tree_depth));
     let state_index = if transform.is_valid {
         command.state_index.clone()
     } else {
-        &max_index - BigUint::one()
+        &max_index - Field::one()
     };
-    let current_leaf_hash = state_leaf_hash(state_leaf)?;
-    check_inclusion(
+    let current_leaf_hash = state_leaf_hash_digest(state_leaf)?;
+    check_inclusion_digest(
         "process state leaf",
         &current_leaf_hash,
         &state_index,
         &input.current_state_leaves_path_elements[i],
-        current_state_root,
+        &field_to_digest(current_state_root),
     )?;
     check_inclusion(
         "process active leaf",
@@ -310,7 +298,7 @@ fn process_one(
     let vote_index = if transform.is_valid {
         command.vote_option_index.clone()
     } else {
-        BigUint::from(0u32)
+        Field::from(0u32)
     };
     let current_vote_root = root_from_path(
         &input.current_vote_weights[i],
@@ -341,7 +329,7 @@ fn process_one(
         &input.current_vote_weights_path_elements[i],
     )?;
 
-    let mut new_state_leaf: [Field; 10] = std::array::from_fn(|_| BigUint::from(0u32));
+    let mut new_state_leaf: [Field; 10] = std::array::from_fn(|_| Field::from(0u32));
     new_state_leaf[0] = transform.new_pub_key[0].clone();
     new_state_leaf[1] = transform.new_pub_key[1].clone();
     new_state_leaf[2] = if transform.is_valid {
@@ -363,7 +351,7 @@ fn process_one(
     new_state_leaf[6] = state_leaf[6].clone();
     new_state_leaf[7] = state_leaf[7].clone();
     new_state_leaf[8] = state_leaf[8].clone();
-    new_state_leaf[9] = BigUint::from(0u32);
+    new_state_leaf[9] = Field::from(0u32);
 
     let new_leaf_hash = state_leaf_hash(&new_state_leaf)?;
     root_from_path(
@@ -379,11 +367,10 @@ struct TransformResult {
     new_balance: Field,
 }
 
-/// Mirrors `amaci/power/stateLeafTransformer.circom::StateLeafTransformer`.
 fn state_leaf_transformer(
     input: &ProcessMessagesInput,
     packed: &crate::packing::ProcessMessagesPackedVals,
-    state_leaf: &[Field],
+    state_leaf: &StateLeaf,
     current_votes_for_option: &Field,
     deactivate: &Field,
     command: &Command,
@@ -397,7 +384,7 @@ fn state_leaf_transformer(
     )?;
     let active = deactivate.is_zero();
     let is_deactivated_odd = if active && msg_valid.0 {
-        elgamal_decrypt_x_and_odd(
+        decrypt_deactivation_flag(
             &[state_leaf[5].clone(), state_leaf[6].clone()],
             &[state_leaf[7].clone(), state_leaf[8].clone()],
             &input.coord_priv_key,
@@ -418,17 +405,16 @@ fn state_leaf_transformer(
     })
 }
 
-/// Mirrors `amaci/power/messageValidator.circom::MessageValidator`.
 fn message_validator(
     packed: &crate::packing::ProcessMessagesPackedVals,
-    state_leaf: &[Field],
+    state_leaf: &StateLeaf,
     current_votes_for_option: &Field,
     command: &Command,
     expected_poll_id: &Field,
 ) -> ProofResult<(bool, Field)> {
     let state_index_ok = command.state_index <= packed.num_sign_ups;
     let vote_option_ok = command.vote_option_index < packed.max_vote_options;
-    let nonce_ok = state_leaf[4].clone() + BigUint::one() == command.nonce;
+    let nonce_ok = state_leaf[4].clone() + Field::one() == command.nonce;
     let poll_ok = command.poll_id == *expected_poll_id;
     let sig_ok = if state_index_ok && vote_option_ok && nonce_ok && poll_ok {
         verify_command_signature(
@@ -442,7 +428,7 @@ fn message_validator(
     };
     let vote_weight_ok = &command.new_vote_weight <= max_vote_weight();
 
-    let is_quad = packed.is_quadratic_cost == BigUint::one();
+    let is_quad = packed.is_quadratic_cost == Field::one();
     let current_cost = if is_quad {
         current_votes_for_option * current_votes_for_option
     } else {
@@ -458,7 +444,7 @@ fn message_validator(
     let new_balance = if sufficient {
         available - cost
     } else {
-        BigUint::from(0u32)
+        Field::from(0u32)
     };
 
     Ok((
@@ -481,19 +467,12 @@ pub enum EmptyRule {
 /// Mirrors the `MessageHasher` loop in `ProcessMessages` and `ProcessDeactivateMessages`.
 pub fn message_chain(
     start: &Field,
-    msgs: &[Vec<Field>],
+    msgs: &[Message],
     enc_pub_keys: &[[Field; 2]],
     empty_rule: EmptyRule,
 ) -> ProofResult<Field> {
     let mut current = start.clone();
     for (msg, enc_pub_key) in msgs.iter().zip(enc_pub_keys.iter()) {
-        if msg.len() != 10 {
-            return Err(ProofError::InvalidLength {
-                name: "message",
-                expected: 10,
-                actual: msg.len(),
-            });
-        }
         let is_empty = match empty_rule {
             EmptyRule::EncPubKeyX => enc_pub_key[0].is_zero(),
             EmptyRule::Message0 => msg[0].is_zero(),

@@ -1,4 +1,4 @@
-use amaci_proof_core::sample_inputs;
+use amaci_proof_core::{codec::encode_input, sample_inputs};
 use amaci_proof_core::{execute_proof_logic, PublicOutput};
 use amaci_proof_risc0_methods::{AMACI_PROOF_RISC0_GUEST_ELF, AMACI_PROOF_RISC0_GUEST_ID};
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
@@ -6,6 +6,8 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const DEFAULT_CIRCUIT: &str = "process-messages-native-2-1-5-full";
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -49,7 +51,7 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
         let circuit = args
             .first()
             .cloned()
-            .unwrap_or_else(|| "process-messages-2-1-5".to_string());
+            .unwrap_or_else(|| DEFAULT_CIRCUIT.to_string());
         Ok(Command::Prove {
             circuit,
             receipt_path: None,
@@ -59,7 +61,7 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 }
 
 fn parse_prove_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
-    let mut circuit = "process-messages-2-1-5".to_string();
+    let mut circuit = DEFAULT_CIRCUIT.to_string();
     let mut receipt_path = None;
     let mut public_path = None;
     let mut i = 0;
@@ -143,7 +145,12 @@ fn prove(
     })?;
 
     let expected_output = execute_proof_logic(&input)?;
-    let env = ExecutorEnv::builder().write(&input)?.build()?;
+    let input_bytes = encode_input(&input);
+    let input_len = input_bytes.len() as u32;
+    let env = ExecutorEnv::builder()
+        .write(&input_len)?
+        .write_slice(&input_bytes)
+        .build()?;
     let prove_info = default_prover().prove(env, AMACI_PROOF_RISC0_GUEST_ELF)?;
     let receipt = prove_info.receipt;
     receipt.verify(AMACI_PROOF_RISC0_GUEST_ID)?;

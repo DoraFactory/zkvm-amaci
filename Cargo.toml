@@ -1,8 +1,5 @@
 [workspace]
 members = [
-    "crates/baby-jubjub",
-    "crates/eddsa-poseidon",
-    "crates/maci-crypto",
     "crates/proof-core",
     "crates/proof-risc0-host",
     "crates/proof-risc0-guest",
@@ -19,6 +16,3 @@ opt-level = 3
 [profile.release]
 debug = 1
 lto = true
-
-[patch.crates-io]
-blake = { path = "patches/blake" }
