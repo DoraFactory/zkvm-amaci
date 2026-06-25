@@ -1,4 +1,7 @@
-use amaci_proof_core::{codec::decode_input, execute_proof_logic};
+use amaci_proof_core::{
+    codec::{decode_input, encode_public_output},
+    execute_proof_logic,
+};
 use risc0_zkvm::guest::env;
 
 fn main() {
@@ -7,5 +10,6 @@ fn main() {
     env::read_slice(&mut input_bytes);
     let input = decode_input(&input_bytes).expect("AMACI input decode failed");
     let output = execute_proof_logic(&input).expect("AMACI proof logic failed");
-    env::commit(&output);
+    let output_bytes = encode_public_output(&output);
+    env::commit_slice(&output_bytes);
 }

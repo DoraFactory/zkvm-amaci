@@ -5,6 +5,9 @@ use num_traits::ToPrimitive;
 use sha2::{Digest as Sha2Digest, Sha256};
 
 pub type Digest = [u8; 32];
+pub type Commitment = Digest;
+pub type InputHash = Digest;
+pub type Root = Digest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeCommand {

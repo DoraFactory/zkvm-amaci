@@ -1,4 +1,7 @@
-use amaci_proof_core::{codec::encode_input, sample_inputs};
+use amaci_proof_core::{
+    codec::{decode_public_output, encode_input},
+    sample_inputs,
+};
 use amaci_proof_core::{execute_proof_logic, ProverInput, PublicOutput};
 use sp1_sdk::blocking::{ProveRequest, Prover, ProverClient, SP1Stdin};
 use sp1_sdk::ProvingKey;
@@ -185,11 +188,14 @@ fn prove(
     let client = ProverClient::builder().cpu().build();
     let pk = client.setup(AMACI_SP1_ELF)?;
     let mut stdin = SP1Stdin::new();
-    stdin.write_vec(encode_input(&input));
+    let input_bytes = encode_input(&input);
+    println!("input_bytes={}", input_bytes.len());
+    stdin.write_vec(input_bytes);
 
     let proof = client.prove(&pk, stdin).core().run()?;
     client.verify(&proof, pk.verifying_key(), None)?;
-    let journal_output = decode_public_output(&proof)?;
+    println!("public_bytes={}", proof.public_values.as_slice().len());
+    let journal_output = decode_sp1_public_output(&proof)?;
     if journal_output != expected_output {
         return Err("public values did not match native proof-core output".into());
     }
@@ -218,10 +224,13 @@ fn execute(circuit: &str, public_path: Option<&Path>) -> Result<(), Box<dyn Erro
 
     let client = ProverClient::builder().cpu().build();
     let mut stdin = SP1Stdin::new();
-    stdin.write_vec(encode_input(&input));
+    let input_bytes = encode_input(&input);
+    println!("input_bytes={}", input_bytes.len());
+    stdin.write_vec(input_bytes);
 
     let (public_values, report) = client.execute(AMACI_SP1_ELF, stdin).run()?;
-    let journal_output = decode_public_values(public_values);
+    println!("public_bytes={}", public_values.as_slice().len());
+    let journal_output = decode_sp1_public_values(public_values)?;
     if journal_output != expected_output {
         return Err("execute public values did not match native proof-core output".into());
     }
@@ -253,7 +262,8 @@ fn verify(proof_path: &Path, public_path: Option<&Path>) -> Result<(), Box<dyn E
     let client = ProverClient::builder().cpu().build();
     let pk = client.setup(AMACI_SP1_ELF)?;
     client.verify(&proof, pk.verifying_key(), None)?;
-    let journal_output = decode_public_output(&proof)?;
+    println!("public_bytes={}", proof.public_values.as_slice().len());
+    let journal_output = decode_sp1_public_output(&proof)?;
 
     println!("proof verify ok");
     println!("proof={}", proof_path.display());
@@ -269,12 +279,16 @@ fn verify(proof_path: &Path, public_path: Option<&Path>) -> Result<(), Box<dyn E
     Ok(())
 }
 
-fn decode_public_output(proof: &SP1ProofWithPublicValues) -> Result<PublicOutput, Box<dyn Error>> {
-    Ok(decode_public_values(proof.public_values.clone()))
+fn decode_sp1_public_output(
+    proof: &SP1ProofWithPublicValues,
+) -> Result<PublicOutput, Box<dyn Error>> {
+    decode_sp1_public_values(proof.public_values.clone())
 }
 
-fn decode_public_values(mut public_values: SP1PublicValues) -> PublicOutput {
-    public_values.read::<PublicOutput>()
+fn decode_sp1_public_values(
+    public_values: SP1PublicValues,
+) -> Result<PublicOutput, Box<dyn Error>> {
+    Ok(decode_public_output(public_values.as_slice())?)
 }
 
 fn write_parented(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {

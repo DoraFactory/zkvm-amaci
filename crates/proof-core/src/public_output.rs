@@ -1,5 +1,5 @@
 use crate::field::Field;
-use crate::native_types::{field_to_digest, Digest};
+use crate::native_types::{field_to_digest, Commitment, Digest, InputHash, Root};
 use serde::{Deserialize, Serialize};
 
 pub type PublicValue = Digest;
@@ -18,43 +18,43 @@ pub enum PublicOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessMessagesPublicOutput {
-    pub input_hash: PublicValue,
+    pub input_hash: InputHash,
     pub packed_vals: PublicValue,
     pub coord_pub_key_hash: PublicValue,
-    pub batch_start_hash: PublicValue,
-    pub batch_end_hash: PublicValue,
-    pub current_state_commitment: PublicValue,
-    pub new_state_commitment: PublicValue,
-    pub deactivate_commitment: PublicValue,
+    pub batch_start_hash: Digest,
+    pub batch_end_hash: Digest,
+    pub current_state_commitment: Commitment,
+    pub new_state_commitment: Commitment,
+    pub deactivate_commitment: Commitment,
     pub expected_poll_id: PublicValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TallyVotesPublicOutput {
-    pub input_hash: PublicValue,
+    pub input_hash: InputHash,
     pub packed_vals: PublicValue,
-    pub state_commitment: PublicValue,
-    pub current_tally_commitment: PublicValue,
-    pub new_tally_commitment: PublicValue,
+    pub state_commitment: Commitment,
+    pub current_tally_commitment: Commitment,
+    pub new_tally_commitment: Commitment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessDeactivatePublicOutput {
-    pub input_hash: PublicValue,
-    pub new_deactivate_root: PublicValue,
+    pub input_hash: InputHash,
+    pub new_deactivate_root: Root,
     pub coord_pub_key_hash: PublicValue,
-    pub batch_start_hash: PublicValue,
-    pub batch_end_hash: PublicValue,
-    pub current_deactivate_commitment: PublicValue,
-    pub new_deactivate_commitment: PublicValue,
-    pub current_state_root: PublicValue,
+    pub batch_start_hash: Digest,
+    pub batch_end_hash: Digest,
+    pub current_deactivate_commitment: Commitment,
+    pub new_deactivate_commitment: Commitment,
+    pub current_state_root: Root,
     pub expected_poll_id: PublicValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddNewKeyPublicOutput {
-    pub input_hash: PublicValue,
-    pub deactivate_root: PublicValue,
+    pub input_hash: InputHash,
+    pub deactivate_root: Root,
     pub coord_pub_key_hash: PublicValue,
     pub nullifier: PublicValue,
     pub d1: [PublicValue; 2],

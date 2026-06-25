@@ -1,12 +1,18 @@
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
 use crate::native_types::{field_to_digest, Digest};
+use crate::public_output::{
+    AddNewKeyPublicOutput, ProcessDeactivatePublicOutput, ProcessMessagesPublicOutput,
+    TallyVotesPublicOutput,
+};
 use crate::types::{
     AddNewKeyInput, Message, PathElement, PathElements, ProcessDeactivateInput,
     ProcessMessagesInput, ProverInput, PubKey, StateLeaf, TallyVotesInput, VoteRow, VOTE_ROW_WORDS,
 };
+use crate::PublicOutput;
 
-const MAGIC: &[u8; 8] = b"AMACIZK1";
+const INPUT_MAGIC: &[u8; 8] = b"AMACIZK1";
+const PUBLIC_MAGIC: &[u8; 8] = b"AMACIPU1";
 const TAG_PROCESS_MESSAGES: u8 = 1;
 const TAG_TALLY_VOTES: u8 = 2;
 const TAG_PROCESS_DEACTIVATE: u8 = 3;
@@ -14,7 +20,7 @@ const TAG_ADD_NEW_KEY: u8 = 4;
 
 pub fn encode_input(input: &ProverInput) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(INPUT_MAGIC);
     match input {
         ProverInput::ProcessMessages(input) => {
             out.push(TAG_PROCESS_MESSAGES);
@@ -38,7 +44,7 @@ pub fn encode_input(input: &ProverInput) -> Vec<u8> {
 
 pub fn decode_input(bytes: &[u8]) -> ProofResult<ProverInput> {
     let mut input = Decoder::new(bytes);
-    input.expect_bytes("codec magic", MAGIC)?;
+    input.expect_bytes("input codec magic", INPUT_MAGIC)?;
     let tag = input.read_u8("input tag")?;
     let decoded = match tag {
         TAG_PROCESS_MESSAGES => ProverInput::ProcessMessages(decode_process_messages(&mut input)?),
@@ -51,8 +57,155 @@ pub fn decode_input(bytes: &[u8]) -> ProofResult<ProverInput> {
             return Err(ProofError::Codec(format!("unknown prover input tag {tag}")));
         }
     };
-    input.finish()?;
+    input.finish("prover input")?;
     Ok(decoded)
+}
+
+pub fn encode_public_output(output: &PublicOutput) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(PUBLIC_MAGIC);
+    match output {
+        PublicOutput::ProcessMessages(output) => {
+            out.push(TAG_PROCESS_MESSAGES);
+            encode_process_messages_public(&mut out, output);
+        }
+        PublicOutput::TallyVotes(output) => {
+            out.push(TAG_TALLY_VOTES);
+            encode_tally_votes_public(&mut out, output);
+        }
+        PublicOutput::ProcessDeactivate(output) => {
+            out.push(TAG_PROCESS_DEACTIVATE);
+            encode_process_deactivate_public(&mut out, output);
+        }
+        PublicOutput::AddNewKey(output) => {
+            out.push(TAG_ADD_NEW_KEY);
+            encode_add_new_key_public(&mut out, output);
+        }
+    }
+    out
+}
+
+pub fn decode_public_output(bytes: &[u8]) -> ProofResult<PublicOutput> {
+    let mut input = Decoder::new(bytes);
+    input.expect_bytes("public codec magic", PUBLIC_MAGIC)?;
+    let tag = input.read_u8("public output tag")?;
+    let decoded = match tag {
+        TAG_PROCESS_MESSAGES => {
+            PublicOutput::ProcessMessages(decode_process_messages_public(&mut input)?)
+        }
+        TAG_TALLY_VOTES => PublicOutput::TallyVotes(decode_tally_votes_public(&mut input)?),
+        TAG_PROCESS_DEACTIVATE => {
+            PublicOutput::ProcessDeactivate(decode_process_deactivate_public(&mut input)?)
+        }
+        TAG_ADD_NEW_KEY => PublicOutput::AddNewKey(decode_add_new_key_public(&mut input)?),
+        _ => {
+            return Err(ProofError::Codec(format!(
+                "unknown public output tag {tag}"
+            )));
+        }
+    };
+    input.finish("public output")?;
+    Ok(decoded)
+}
+
+fn encode_process_messages_public(out: &mut Vec<u8>, output: &ProcessMessagesPublicOutput) {
+    write_digest(out, &output.input_hash);
+    write_digest(out, &output.packed_vals);
+    write_digest(out, &output.coord_pub_key_hash);
+    write_digest(out, &output.batch_start_hash);
+    write_digest(out, &output.batch_end_hash);
+    write_digest(out, &output.current_state_commitment);
+    write_digest(out, &output.new_state_commitment);
+    write_digest(out, &output.deactivate_commitment);
+    write_digest(out, &output.expected_poll_id);
+}
+
+fn decode_process_messages_public(
+    input: &mut Decoder<'_>,
+) -> ProofResult<ProcessMessagesPublicOutput> {
+    Ok(ProcessMessagesPublicOutput {
+        input_hash: input.read_digest("inputHash")?,
+        packed_vals: input.read_digest("packedVals")?,
+        coord_pub_key_hash: input.read_digest("coordPubKeyHash")?,
+        batch_start_hash: input.read_digest("batchStartHash")?,
+        batch_end_hash: input.read_digest("batchEndHash")?,
+        current_state_commitment: input.read_digest("currentStateCommitment")?,
+        new_state_commitment: input.read_digest("newStateCommitment")?,
+        deactivate_commitment: input.read_digest("deactivateCommitment")?,
+        expected_poll_id: input.read_digest("expectedPollId")?,
+    })
+}
+
+fn encode_tally_votes_public(out: &mut Vec<u8>, output: &TallyVotesPublicOutput) {
+    write_digest(out, &output.input_hash);
+    write_digest(out, &output.packed_vals);
+    write_digest(out, &output.state_commitment);
+    write_digest(out, &output.current_tally_commitment);
+    write_digest(out, &output.new_tally_commitment);
+}
+
+fn decode_tally_votes_public(input: &mut Decoder<'_>) -> ProofResult<TallyVotesPublicOutput> {
+    Ok(TallyVotesPublicOutput {
+        input_hash: input.read_digest("inputHash")?,
+        packed_vals: input.read_digest("packedVals")?,
+        state_commitment: input.read_digest("stateCommitment")?,
+        current_tally_commitment: input.read_digest("currentTallyCommitment")?,
+        new_tally_commitment: input.read_digest("newTallyCommitment")?,
+    })
+}
+
+fn encode_process_deactivate_public(out: &mut Vec<u8>, output: &ProcessDeactivatePublicOutput) {
+    write_digest(out, &output.input_hash);
+    write_digest(out, &output.new_deactivate_root);
+    write_digest(out, &output.coord_pub_key_hash);
+    write_digest(out, &output.batch_start_hash);
+    write_digest(out, &output.batch_end_hash);
+    write_digest(out, &output.current_deactivate_commitment);
+    write_digest(out, &output.new_deactivate_commitment);
+    write_digest(out, &output.current_state_root);
+    write_digest(out, &output.expected_poll_id);
+}
+
+fn decode_process_deactivate_public(
+    input: &mut Decoder<'_>,
+) -> ProofResult<ProcessDeactivatePublicOutput> {
+    Ok(ProcessDeactivatePublicOutput {
+        input_hash: input.read_digest("inputHash")?,
+        new_deactivate_root: input.read_digest("newDeactivateRoot")?,
+        coord_pub_key_hash: input.read_digest("coordPubKeyHash")?,
+        batch_start_hash: input.read_digest("batchStartHash")?,
+        batch_end_hash: input.read_digest("batchEndHash")?,
+        current_deactivate_commitment: input.read_digest("currentDeactivateCommitment")?,
+        new_deactivate_commitment: input.read_digest("newDeactivateCommitment")?,
+        current_state_root: input.read_digest("currentStateRoot")?,
+        expected_poll_id: input.read_digest("expectedPollId")?,
+    })
+}
+
+fn encode_add_new_key_public(out: &mut Vec<u8>, output: &AddNewKeyPublicOutput) {
+    write_digest(out, &output.input_hash);
+    write_digest(out, &output.deactivate_root);
+    write_digest(out, &output.coord_pub_key_hash);
+    write_digest(out, &output.nullifier);
+    write_digest(out, &output.d1[0]);
+    write_digest(out, &output.d1[1]);
+    write_digest(out, &output.d2[0]);
+    write_digest(out, &output.d2[1]);
+    write_digest(out, &output.new_pub_key_hash);
+    write_digest(out, &output.poll_id);
+}
+
+fn decode_add_new_key_public(input: &mut Decoder<'_>) -> ProofResult<AddNewKeyPublicOutput> {
+    Ok(AddNewKeyPublicOutput {
+        input_hash: input.read_digest("inputHash")?,
+        deactivate_root: input.read_digest("deactivateRoot")?,
+        coord_pub_key_hash: input.read_digest("coordPubKeyHash")?,
+        nullifier: input.read_digest("nullifier")?,
+        d1: [input.read_digest("d1")?, input.read_digest("d1")?],
+        d2: [input.read_digest("d2")?, input.read_digest("d2")?],
+        new_pub_key_hash: input.read_digest("newPubKeyHash")?,
+        poll_id: input.read_digest("pollId")?,
+    })
 }
 
 fn encode_process_messages(out: &mut Vec<u8>, input: &ProcessMessagesInput) {
@@ -264,6 +417,10 @@ fn write_field(out: &mut Vec<u8>, value: &Field) {
     out.extend_from_slice(&field_to_digest(value));
 }
 
+fn write_digest(out: &mut Vec<u8>, value: &Digest) {
+    out.extend_from_slice(value);
+}
+
 fn write_pub_key(out: &mut Vec<u8>, value: &PubKey) {
     write_field(out, &value[0]);
     write_field(out, &value[1]);
@@ -352,12 +509,12 @@ impl<'a> Decoder<'a> {
         Self { bytes, pos: 0 }
     }
 
-    fn finish(&self) -> ProofResult<()> {
+    fn finish(&self, subject: &'static str) -> ProofResult<()> {
         if self.pos == self.bytes.len() {
             Ok(())
         } else {
             Err(ProofError::Codec(format!(
-                "trailing {} bytes after prover input decode",
+                "trailing {} bytes after {subject} decode",
                 self.bytes.len() - self.pos
             )))
         }
@@ -385,11 +542,14 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_field(&mut self, name: &'static str) -> ProofResult<Field> {
-        let bytes: Digest = self
+        Ok(Field::from_be_bytes(self.read_digest(name)?))
+    }
+
+    fn read_digest(&mut self, name: &'static str) -> ProofResult<Digest> {
+        Ok(self
             .take(name, 32)?
             .try_into()
-            .expect("decoder returned exact field byte length");
-        Ok(Field::from_be_bytes(bytes))
+            .expect("decoder returned exact digest byte length"))
     }
 
     fn read_pub_key(&mut self, name: &'static str) -> ProofResult<PubKey> {

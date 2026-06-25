@@ -1,4 +1,7 @@
-use amaci_proof_core::{codec::encode_input, sample_inputs};
+use amaci_proof_core::{
+    codec::{decode_public_output, encode_input},
+    sample_inputs,
+};
 use amaci_proof_core::{execute_proof_logic, PublicOutput};
 use amaci_proof_risc0_methods::{AMACI_PROOF_RISC0_GUEST_ELF, AMACI_PROOF_RISC0_GUEST_ID};
 use risc0_zkvm::{default_prover, ExecutorEnv, Receipt};
@@ -147,6 +150,7 @@ fn prove(
     let expected_output = execute_proof_logic(&input)?;
     let input_bytes = encode_input(&input);
     let input_len = input_bytes.len() as u32;
+    println!("input_bytes={}", input_bytes.len());
     let env = ExecutorEnv::builder()
         .write(&input_len)?
         .write_slice(&input_bytes)
@@ -154,7 +158,8 @@ fn prove(
     let prove_info = default_prover().prove(env, AMACI_PROOF_RISC0_GUEST_ELF)?;
     let receipt = prove_info.receipt;
     receipt.verify(AMACI_PROOF_RISC0_GUEST_ID)?;
-    let journal_output: PublicOutput = receipt.journal.decode()?;
+    println!("public_bytes={}", receipt.journal.bytes.len());
+    let journal_output: PublicOutput = decode_public_output(&receipt.journal.bytes)?;
     if journal_output != expected_output {
         return Err("journal output did not match native proof-core output".into());
     }
@@ -181,7 +186,8 @@ fn verify(receipt_path: &Path, public_path: Option<&Path>) -> Result<(), Box<dyn
     let bytes = fs::read(receipt_path)?;
     let receipt: Receipt = bincode::deserialize(&bytes)?;
     receipt.verify(AMACI_PROOF_RISC0_GUEST_ID)?;
-    let journal_output: PublicOutput = receipt.journal.decode()?;
+    println!("public_bytes={}", receipt.journal.bytes.len());
+    let journal_output: PublicOutput = decode_public_output(&receipt.journal.bytes)?;
 
     println!("receipt verify ok");
     println!("receipt={}", receipt_path.display());

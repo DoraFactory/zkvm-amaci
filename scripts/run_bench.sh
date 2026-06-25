@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+usage:
+  scripts/run_bench.sh risc0 [circuit]
+  scripts/run_bench.sh sp1 [circuit]
+  scripts/run_bench.sh sp1-execute [circuit]
+
+The script writes backend logs to logs/ and timing/artifact metrics to metrics/.
+USAGE
+}
+
+backend="${1:-}"
+case "$backend" in
+  risc0|sp1|sp1-execute) ;;
+  -h|--help|"")
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown backend: $backend" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+circuit="${2:-process-messages-native-2-1-5-full}"
+stamp="$(date +%Y%m%d-%H%M%S)"
+mkdir -p logs metrics proofs sp1-proofs
+
+log="logs/${backend}-${circuit}-${stamp}.log"
+metrics="metrics/${backend}-${circuit}-${stamp}.metrics.txt"
+time_out="metrics/${backend}-${circuit}-${stamp}.time.txt"
+
+stat_size() {
+  local path="$1"
+  if [[ ! -e "$path" ]]; then
+    echo "missing"
+  elif stat -c%s "$path" >/dev/null 2>&1; then
+    stat -c%s "$path"
+  else
+    stat -f%z "$path"
+  fi
+}
+
+run_timed() {
+  local label="$1"
+  shift
+  {
+    echo "== ${label} start $(date -Is) =="
+    echo "+ $*"
+  } >> "$log"
+  if command -v /usr/bin/time >/dev/null 2>&1; then
+    /usr/bin/time -v -o "$time_out" -a "$@" >> "$log" 2>&1
+  else
+    { time "$@"; } >> "$log" 2>&1
+  fi
+  echo "== ${label} end $(date -Is) ==" >> "$log"
+}
+
+write_common_metrics() {
+  {
+    echo "backend=$backend"
+    echo "circuit=$circuit"
+    echo "stamp=$stamp"
+    echo "log=$log"
+    echo "time_log=$time_out"
+  } >> "$metrics"
+}
+
+run_risc0() {
+  local target_dir="${RISC0_TARGET_DIR:-/tmp/zkvm-amaci-risc0-target}"
+  local receipt="proofs/${circuit}.risc0.receipt.bin"
+  local public="proofs/${circuit}.risc0.public.json"
+  local verified_public="proofs/${circuit}.risc0.verified-public.json"
+
+  run_timed "risc0 prove" \
+    env RISC0_DEV_MODE="${RISC0_DEV_MODE:-0}" CARGO_TARGET_DIR="$target_dir" \
+      cargo --config configs/cargo-risc0-native-patches.toml run --release \
+      -p amaci-proof-risc0-host -- \
+      prove "$circuit" \
+      --receipt "$receipt" \
+      --public "$public"
+
+  run_timed "risc0 verify" \
+    env RISC0_DEV_MODE="${RISC0_DEV_MODE:-0}" CARGO_TARGET_DIR="$target_dir" \
+      cargo --config configs/cargo-risc0-native-patches.toml run --release \
+      -p amaci-proof-risc0-host -- \
+      verify \
+      --receipt "$receipt" \
+      --public "$verified_public"
+
+  cmp -s "$public" "$verified_public"
+  echo "risc0 public output match" >> "$log"
+
+  write_common_metrics
+  {
+    echo "target_dir=$target_dir"
+    echo "receipt=$receipt"
+    echo "receipt_bytes=$(stat_size "$receipt")"
+    echo "public=$public"
+    echo "public_bytes=$(stat_size "$public")"
+    echo "verified_public=$verified_public"
+    echo "verified_public_bytes=$(stat_size "$verified_public")"
+    echo "verify_cmp=ok"
+  } >> "$metrics"
+}
+
+run_sp1() {
+  local target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-target}"
+  local proof="sp1-proofs/${circuit}.sp1-proof.bin"
+  local public="sp1-proofs/${circuit}.sp1.public.json"
+  local verified_public="sp1-proofs/${circuit}.sp1.verified-public.json"
+
+  run_timed "sp1 prove" \
+    env CARGO_TARGET_DIR="$target_dir" \
+      cargo --config configs/cargo-sp1-native-patches.toml run --release \
+      -p amaci-proof-sp1-host -- \
+      prove "$circuit" \
+      --proof "$proof" \
+      --public "$public"
+
+  run_timed "sp1 verify" \
+    env CARGO_TARGET_DIR="$target_dir" \
+      cargo --config configs/cargo-sp1-native-patches.toml run --release \
+      -p amaci-proof-sp1-host -- \
+      verify \
+      --proof "$proof" \
+      --public "$verified_public"
+
+  cmp -s "$public" "$verified_public"
+  echo "sp1 public output match" >> "$log"
+
+  write_common_metrics
+  {
+    echo "target_dir=$target_dir"
+    echo "proof=$proof"
+    echo "proof_bytes=$(stat_size "$proof")"
+    echo "public=$public"
+    echo "public_bytes=$(stat_size "$public")"
+    echo "verified_public=$verified_public"
+    echo "verified_public_bytes=$(stat_size "$verified_public")"
+    echo "verify_cmp=ok"
+  } >> "$metrics"
+}
+
+run_sp1_execute() {
+  local target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-target}"
+  local public="sp1-proofs/${circuit}.sp1.execute-public.json"
+
+  run_timed "sp1 execute" \
+    env CARGO_TARGET_DIR="$target_dir" \
+      cargo --config configs/cargo-sp1-native-patches.toml run --release \
+      -p amaci-proof-sp1-host -- \
+      execute "$circuit" \
+      --public "$public"
+
+  write_common_metrics
+  {
+    echo "target_dir=$target_dir"
+    echo "public=$public"
+    echo "public_bytes=$(stat_size "$public")"
+  } >> "$metrics"
+}
+
+echo "log=$log"
+echo "metrics=$metrics"
+
+case "$backend" in
+  risc0) run_risc0 ;;
+  sp1) run_sp1 ;;
+  sp1-execute) run_sp1_execute ;;
+esac
+
+echo "done"
+echo "log=$log"
+echo "metrics=$metrics"

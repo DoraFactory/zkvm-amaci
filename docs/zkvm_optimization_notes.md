@@ -22,8 +22,14 @@ Completed fixed-layout refactor:
   data before hashing.
 - RISC Zero and SP1 private inputs use a shared compact byte codec instead of
   serde-decoding `ProverInput` in the guest.
+- RISC Zero and SP1 public outputs use the same compact byte codec and are
+  committed as raw fixed bytes instead of serde-encoding `PublicOutput` in the
+  guest journal.
 - Merkle inclusion/root checks have digest-native APIs and only convert to
   `Field` at protocol boundaries that still store roots as field words.
+- `scripts/run_bench.sh` captures prove/verify or execute logs, `/usr/bin/time
+  -v` memory/time data, proof artifact sizes, public JSON sizes, and public
+  output compare status.
 
 Removed components:
 
@@ -35,7 +41,7 @@ Removed components:
 Current optimization targets still worth measuring:
 
 - measure proof memory and time after the fixed-width `U256` / `[u8; 32]`
-  public-output refactor;
+  public-output and compact journal refactor;
 - add separate fixed vote-row types if future circuit sizes use
   `vote_option_tree_depth > 1`;
 - add memory/time snapshots for RISC Zero and SP1 after every proof run.

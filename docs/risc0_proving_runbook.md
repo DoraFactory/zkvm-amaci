@@ -11,6 +11,19 @@ rzup install
 
 ## Prove In Background
 
+Preferred command with metrics:
+
+```bash
+cd ~/zkvm-amaci
+git pull --ff-only origin main
+mkdir -p logs metrics proofs
+
+nohup bash scripts/run_bench.sh risc0 process-messages-native-2-1-5-full \
+  > logs/bench-risc0-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+Manual command:
+
 ```bash
 cd ~/zkvm-amaci
 mkdir -p logs proofs
@@ -27,7 +40,7 @@ nohup env RISC0_DEV_MODE=0 CARGO_TARGET_DIR=/tmp/zkvm-amaci-risc0-target \
 Watch:
 
 ```bash
-tail -f $(ls -t logs/risc0-proof-*.log | head -1)
+tail -f $(ls -t logs/risc0-*.log logs/risc0-proof-*.log 2>/dev/null | head -1)
 ```
 
 ## Verify
@@ -50,4 +63,6 @@ cmp -s proofs/process-messages-native-2-1-5-full.risc0.public.json \
 ```
 
 The run is successful when verify prints `receipt verify ok` and the public
-output compare matches.
+output compare matches. Record `input_bytes`, `public_bytes`,
+`receipt_bytes`, and `Maximum resident set size` from the matching metrics and
+time files under `metrics/`.

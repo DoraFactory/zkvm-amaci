@@ -1,5 +1,7 @@
 use amaci_proof_core::circuits::process_messages::{message_chain, EmptyRule};
-use amaci_proof_core::codec::{decode_input, encode_input};
+use amaci_proof_core::codec::{
+    decode_input, decode_public_output, encode_input, encode_public_output,
+};
 use amaci_proof_core::crypto::{
     decrypt_without_check, ecdh_formatted_priv_key, native_encrypt_for_testing,
     native_rerandomize_ciphertext, native_sign_command_for_testing, private_to_pub_key,
@@ -239,9 +241,10 @@ fn compact_codec_roundtrips_all_built_in_inputs() {
         let encoded = encode_input(&input);
         let decoded = decode_input(&encoded).unwrap();
         assert_eq!(decoded, input);
-        assert_eq!(
-            execute_proof_logic(&decoded).unwrap(),
-            execute_proof_logic(&input).unwrap()
-        );
+        let output = execute_proof_logic(&input).unwrap();
+        let decoded_output = execute_proof_logic(&decoded).unwrap();
+        assert_eq!(decoded_output, output);
+        let encoded_output = encode_public_output(&output);
+        assert_eq!(decode_public_output(&encoded_output).unwrap(), output);
     }
 }
