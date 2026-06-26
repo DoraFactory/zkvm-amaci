@@ -90,6 +90,13 @@ Contract message:
 }
 ```
 
+Build the execute JSON from generated artifacts:
+
+```bash
+scripts/make_cosmwasm_sp1_compressed_msg.sh process-messages-native-2-1-5-full \
+  > sp1-proofs/process-messages-native-2-1-5-full.verify-compressed.msg.json
+```
+
 ## Notes
 
 - The verifier crate uses `sp1-verifier = 6.3.0` with default features disabled.

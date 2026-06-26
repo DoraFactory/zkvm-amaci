@@ -247,6 +247,13 @@ The raw triplet for the compressed CosmWasm PoC is `proof.bytes`,
 `public.bin`, and `vkey.bin`. This route keeps the final proof in the
 STARK/FRI family; it is the current end-to-end PQC candidate.
 
+Build a CosmWasm execute message from those compressed artifacts:
+
+```bash
+scripts/make_cosmwasm_sp1_compressed_msg.sh process-messages-native-2-1-5-full \
+  > sp1-proofs/process-messages-native-2-1-5-full.verify-compressed.msg.json
+```
+
 ## CosmWasm SP1 Verifier
 
 `crates/cosmwasm-sp1-verifier` is a minimal CosmWasm contract PoC that can call
