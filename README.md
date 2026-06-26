@@ -76,6 +76,9 @@ nohup bash scripts/run_bench.sh risc0 process-messages-native-2-1-5-full \
 nohup bash scripts/run_bench.sh sp1 process-messages-native-2-1-5-full \
   > logs/bench-sp1-$(date +%Y%m%d-%H%M%S).out 2>&1 &
 
+nohup bash scripts/run_bench.sh sp1-groth16 process-messages-native-2-1-5-full \
+  > logs/bench-sp1-groth16-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+
 nohup bash scripts/run_bench.sh sp1-execute process-messages-native-2-1-5-full \
   > logs/bench-sp1-execute-$(date +%Y%m%d-%H%M%S).out 2>&1 &
 ```
@@ -93,6 +96,7 @@ After completion, inspect:
 ls -lt metrics/*.metrics.txt metrics/*.time.txt | head
 cat $(ls -t metrics/risc0-process-messages-native-2-1-5-full-*.metrics.txt | head -1)
 cat $(ls -t metrics/sp1-process-messages-native-2-1-5-full-*.metrics.txt | head -1)
+cat $(ls -t metrics/sp1-groth16-process-messages-native-2-1-5-full-*.metrics.txt | head -1)
 ```
 
 Key fields to record are `input_bytes`, `public_bytes`, proof/receipt size,
@@ -200,6 +204,41 @@ CARGO_TARGET_DIR=/tmp/zkvm-amaci-sp1-target \
     execute process-messages-native-2-1-5-full \
     --public sp1-proofs/process-messages-native-2-1-5-full.sp1.execute-public.json
 ```
+
+Run a Groth16-wrapped SP1 proof for on-chain/CosmWasm verification:
+
+```bash
+nohup bash scripts/run_bench.sh sp1-groth16 process-messages-native-2-1-5-full \
+  > logs/bench-sp1-groth16-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+This writes:
+
+- full SDK proof: `sp1-proofs/*.sp1-groth16-proof.bin`;
+- on-chain proof bytes: `sp1-proofs/*.sp1-groth16-proof.bytes`;
+- raw public values: `sp1-proofs/*.sp1-groth16.public.bin`;
+- decoded public JSON: `sp1-proofs/*.sp1-groth16.public.json`;
+- SP1 program vkey hash: `sp1-proofs/*.sp1-groth16.vkey.txt`.
+
+The raw triplet for CosmWasm is `proof.bytes`, `public.bin`, and `vkey.txt`.
+
+## CosmWasm SP1 Verifier
+
+`crates/cosmwasm-sp1-verifier` is a minimal CosmWasm contract PoC that calls
+`sp1_verifier::Groth16Verifier` with the raw SP1 Groth16 proof bytes, public
+values bytes, and program vkey hash.
+
+Build the verifier contract:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo build --profile contract -p amaci-cosmwasm-sp1-verifier --target wasm32-unknown-unknown
+ls -lh target/wasm32-unknown-unknown/contract/amaci_cosmwasm_sp1_verifier.wasm
+```
+
+The contract profile strips symbols and optimizes for size. The current PoC
+builds to roughly a few hundred KiB before `wasm-opt`; gas still needs to be
+measured on the target chain.
 
 ## Notes
 

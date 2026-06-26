@@ -7,6 +7,7 @@ edition = "2021"
 amaci-proof-core = { path = "../proof-core" }
 serde_json = "1.0"
 sp1-sdk = { version = "=6.3.0", features = ["blocking"] }
+sp1-verifier = "=6.3.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]

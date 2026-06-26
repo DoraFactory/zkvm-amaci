@@ -6,6 +6,7 @@ usage() {
 usage:
   scripts/run_bench.sh risc0 [circuit]
   scripts/run_bench.sh sp1 [circuit]
+  scripts/run_bench.sh sp1-groth16 [circuit]
   scripts/run_bench.sh sp1-execute [circuit]
 
 The script writes backend logs to logs/ and timing/artifact metrics to metrics/.
@@ -14,7 +15,7 @@ USAGE
 
 backend="${1:-}"
 case "$backend" in
-  risc0|sp1|sp1-execute) ;;
+  risc0|sp1|sp1-groth16|sp1-execute) ;;
   -h|--help|"")
     usage
     exit 0
@@ -146,6 +147,57 @@ run_sp1() {
   } >> "$metrics"
 }
 
+run_sp1_groth16() {
+  local target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-target}"
+  local proof="sp1-proofs/${circuit}.sp1-groth16-proof.bin"
+  local proof_bytes="sp1-proofs/${circuit}.sp1-groth16-proof.bytes"
+  local public="sp1-proofs/${circuit}.sp1-groth16.public.json"
+  local public_bytes="sp1-proofs/${circuit}.sp1-groth16.public.bin"
+  local verified_public="sp1-proofs/${circuit}.sp1-groth16.verified-public.json"
+  local vkey="sp1-proofs/${circuit}.sp1-groth16.vkey.txt"
+
+  run_timed "sp1 groth16 prove" \
+    env CARGO_TARGET_DIR="$target_dir" \
+      cargo --config configs/cargo-sp1-native-patches.toml run --release \
+      -p amaci-proof-sp1-host -- \
+      prove-groth16 "$circuit" \
+      --proof "$proof" \
+      --proof-bytes "$proof_bytes" \
+      --public "$public" \
+      --public-bytes "$public_bytes" \
+      --vkey "$vkey"
+
+  run_timed "sp1 groth16 verify" \
+    env CARGO_TARGET_DIR="$target_dir" \
+      cargo --config configs/cargo-sp1-native-patches.toml run --release \
+      -p amaci-proof-sp1-host -- \
+      verify-groth16 \
+      --proof-bytes "$proof_bytes" \
+      --public-bytes "$public_bytes" \
+      --vkey "$(tr -d '\n' < "$vkey")" \
+      --public "$verified_public"
+
+  cmp -s "$public" "$verified_public"
+  echo "sp1 groth16 public output match" >> "$log"
+
+  write_common_metrics
+  {
+    echo "target_dir=$target_dir"
+    echo "proof=$proof"
+    echo "proof_bytes_bincode=$(stat_size "$proof")"
+    echo "proof_bytes=$proof_bytes"
+    echo "proof_bytes_raw=$(stat_size "$proof_bytes")"
+    echo "public=$public"
+    echo "public_json_bytes=$(stat_size "$public")"
+    echo "public_bytes=$public_bytes"
+    echo "public_bytes_raw=$(stat_size "$public_bytes")"
+    echo "verified_public=$verified_public"
+    echo "verified_public_bytes=$(stat_size "$verified_public")"
+    echo "vkey=$vkey"
+    echo "verify_cmp=ok"
+  } >> "$metrics"
+}
+
 run_sp1_execute() {
   local target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-target}"
   local public="sp1-proofs/${circuit}.sp1.execute-public.json"
@@ -171,6 +223,7 @@ echo "metrics=$metrics"
 case "$backend" in
   risc0) run_risc0 ;;
   sp1) run_sp1 ;;
+  sp1-groth16) run_sp1_groth16 ;;
   sp1-execute) run_sp1_execute ;;
 esac
 

@@ -6,6 +6,7 @@ members = [
     "crates/proof-risc0-methods",
     "crates/proof-sp1-host",
     "crates/proof-sp1-program",
+    "crates/cosmwasm-sp1-verifier",
 ]
 resolver = "2"
 
@@ -16,3 +17,12 @@ opt-level = 3
 [profile.release]
 debug = 1
 lto = true
+
+[profile.contract]
+inherits = "release"
+debug = 0
+lto = true
+opt-level = "z"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
