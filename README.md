@@ -267,14 +267,56 @@ end-to-end PQC.
 Build the verifier contract:
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo build --profile contract -p amaci-cosmwasm-sp1-verifier --target wasm32-unknown-unknown
+scripts/build_cosmwasm_contract.sh
 ls -lh target/wasm32-unknown-unknown/contract/amaci_cosmwasm_sp1_verifier.wasm
 ```
 
-The contract profile strips symbols and optimizes for size. With the compressed
-verifier included, the current PoC builds to under 1 MiB before `wasm-opt`; gas
-and memory still need to be measured on the target chain.
+The script uses nightly `build-std` with MVP-compatible wasm flags. This is
+required for Vota's current wasmvm, which rejects bulk-memory instructions such
+as `memory.copy`.
+
+Deploy with `dorad` on Vota testnet:
+
+```bash
+RPC_URL=https://vota-testnet-rpc.dorafactory.org:443
+CHAIN_ID=vota-testnet
+DORAD_HOME=/tmp/zkvm-amaci-dorad-home
+KEY_NAME=zkvm-amaci-deployer
+GAS_PRICES=10000000000peaka
+WASM=target/wasm32-unknown-unknown/contract/amaci_cosmwasm_sp1_verifier.wasm
+
+mkdir -p "$DORAD_HOME"
+printf '%s\n' "$MNEMONIC" | dorad keys add "$KEY_NAME" \
+  --recover --keyring-backend test --home "$DORAD_HOME"
+
+dorad tx wasm store "$WASM" \
+  --from "$KEY_NAME" --keyring-backend test --home "$DORAD_HOME" \
+  --node "$RPC_URL" --chain-id "$CHAIN_ID" \
+  --gas auto --gas-adjustment 1.8 --gas-prices "$GAS_PRICES" \
+  --broadcast-mode sync --output json -y
+
+dorad tx wasm instantiate <CODE_ID> '{}' \
+  --from "$KEY_NAME" --keyring-backend test --home "$DORAD_HOME" \
+  --node "$RPC_URL" --chain-id "$CHAIN_ID" \
+  --label "zkvm-amaci-sp1-compressed-$(date +%Y%m%d-%H%M%S)" \
+  --no-admin --gas auto --gas-adjustment 1.5 --gas-prices "$GAS_PRICES" \
+  --broadcast-mode sync --output json -y
+```
+
+Build a compressed execute message from high-performance-machine artifacts and
+submit it:
+
+```bash
+scripts/make_cosmwasm_sp1_compressed_msg.sh process-messages-native-2-1-5-full \
+  > sp1-proofs/process-messages-native-2-1-5-full.verify-compressed.msg.json
+
+dorad tx wasm execute <CONTRACT_ADDR> \
+  "$(cat sp1-proofs/process-messages-native-2-1-5-full.verify-compressed.msg.json)" \
+  --from "$KEY_NAME" --keyring-backend test --home "$DORAD_HOME" \
+  --node "$RPC_URL" --chain-id "$CHAIN_ID" \
+  --gas auto --gas-adjustment 2.0 --gas-prices "$GAS_PRICES" \
+  --broadcast-mode sync --output json -y
+```
 
 ## Notes
 
