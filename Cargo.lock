@@ -141,6 +141,7 @@ name = "amaci-proof-sp1-host"
 version = "0.1.0"
 dependencies = [
  "amaci-proof-core",
+ "bincode",
  "serde_json",
  "sp1-build",
  "sp1-sdk",

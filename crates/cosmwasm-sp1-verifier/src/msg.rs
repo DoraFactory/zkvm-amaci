@@ -11,6 +11,11 @@ pub enum ExecuteMsg {
         public_values: Binary,
         vkey_hash: String,
     },
+    VerifyCompressed {
+        proof: Binary,
+        public_values: Binary,
+        vkey_hash: Binary,
+    },
 }
 
 #[cw_serde]

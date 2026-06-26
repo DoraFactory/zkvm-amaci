@@ -86,6 +86,41 @@ CARGO_TARGET_DIR=/tmp/zkvm-amaci-sp1-target \
     --public sp1-proofs/process-messages-native-2-1-5-full.sp1.execute-public.json
 ```
 
+## Compressed STARK Proof
+
+Generate a compressed STARK proof and verify the raw compressed artifacts:
+
+```bash
+cd ~/zkvm-amaci
+git pull --ff-only origin main
+mkdir -p logs metrics sp1-proofs
+
+nohup bash scripts/run_bench.sh sp1-compressed process-messages-native-2-1-5-full \
+  > logs/bench-sp1-compressed-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+Watch:
+
+```bash
+tail -f $(ls -t logs/sp1-compressed-*.log 2>/dev/null | head -1)
+```
+
+The run is successful when the log contains `compressed proof verify ok` and
+`sp1 compressed public output match`.
+
+Artifacts:
+
+- `sp1-proofs/*.sp1-compressed-proof.bin`: full SDK proof with public values.
+- `sp1-proofs/*.sp1-compressed-proof.bytes`: bincode-encoded
+  `SP1Proof::Compressed`, accepted by `SP1CompressedVerifierRaw`.
+- `sp1-proofs/*.sp1-compressed.public.bin`: raw public values bytes committed by
+  the guest.
+- `sp1-proofs/*.sp1-compressed.vkey.bin`: bincode-encoded SP1 program verifying
+  key digest.
+
+This is the end-to-end PQC candidate path. It does not use the BN254
+Groth16/PLONK wrapper.
+
 ## Groth16 Wrapper
 
 Generate a Groth16-wrapped proof and verify the raw on-chain artifacts:

@@ -25,6 +25,7 @@ crates/
   proof-risc0-host/      RISC Zero prove/verify CLI.
   proof-sp1-program/     SP1 guest program entrypoint.
   proof-sp1-host/        SP1 prove/execute/verify CLI.
+  cosmwasm-sp1-verifier/ CosmWasm verifier PoC for SP1 Groth16 and compressed proofs.
 configs/
   cargo-risc0-native-patches.toml
   cargo-sp1-native-patches.toml
@@ -76,6 +77,9 @@ nohup bash scripts/run_bench.sh risc0 process-messages-native-2-1-5-full \
 nohup bash scripts/run_bench.sh sp1 process-messages-native-2-1-5-full \
   > logs/bench-sp1-$(date +%Y%m%d-%H%M%S).out 2>&1 &
 
+nohup bash scripts/run_bench.sh sp1-compressed process-messages-native-2-1-5-full \
+  > logs/bench-sp1-compressed-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+
 nohup bash scripts/run_bench.sh sp1-groth16 process-messages-native-2-1-5-full \
   > logs/bench-sp1-groth16-$(date +%Y%m%d-%H%M%S).out 2>&1 &
 
@@ -96,6 +100,7 @@ After completion, inspect:
 ls -lt metrics/*.metrics.txt metrics/*.time.txt | head
 cat $(ls -t metrics/risc0-process-messages-native-2-1-5-full-*.metrics.txt | head -1)
 cat $(ls -t metrics/sp1-process-messages-native-2-1-5-full-*.metrics.txt | head -1)
+cat $(ls -t metrics/sp1-compressed-process-messages-native-2-1-5-full-*.metrics.txt | head -1)
 cat $(ls -t metrics/sp1-groth16-process-messages-native-2-1-5-full-*.metrics.txt | head -1)
 ```
 
@@ -222,11 +227,35 @@ This writes:
 
 The raw triplet for CosmWasm is `proof.bytes`, `public.bin`, and `vkey.txt`.
 
+Run a compressed STARK proof for the PQC path:
+
+```bash
+nohup bash scripts/run_bench.sh sp1-compressed process-messages-native-2-1-5-full \
+  > logs/bench-sp1-compressed-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+This writes:
+
+- full SDK proof: `sp1-proofs/*.sp1-compressed-proof.bin`;
+- raw compressed proof bytes: `sp1-proofs/*.sp1-compressed-proof.bytes`;
+- raw public values: `sp1-proofs/*.sp1-compressed.public.bin`;
+- decoded public JSON: `sp1-proofs/*.sp1-compressed.public.json`;
+- bincode-encoded SP1 program vkey digest:
+  `sp1-proofs/*.sp1-compressed.vkey.bin`.
+
+The raw triplet for the compressed CosmWasm PoC is `proof.bytes`,
+`public.bin`, and `vkey.bin`. This route keeps the final proof in the
+STARK/FRI family; it is the current end-to-end PQC candidate.
+
 ## CosmWasm SP1 Verifier
 
-`crates/cosmwasm-sp1-verifier` is a minimal CosmWasm contract PoC that calls
-`sp1_verifier::Groth16Verifier` with the raw SP1 Groth16 proof bytes, public
-values bytes, and program vkey hash.
+`crates/cosmwasm-sp1-verifier` is a minimal CosmWasm contract PoC that can call
+both `sp1_verifier::Groth16Verifier` and
+`sp1_verifier::compressed::SP1CompressedVerifierRaw`.
+
+Groth16 is useful as a compact on-chain baseline but is not PQC. The compressed
+proof path verifies SP1 compressed STARK proofs and is the route to measure for
+end-to-end PQC.
 
 Build the verifier contract:
 
@@ -236,9 +265,9 @@ cargo build --profile contract -p amaci-cosmwasm-sp1-verifier --target wasm32-un
 ls -lh target/wasm32-unknown-unknown/contract/amaci_cosmwasm_sp1_verifier.wasm
 ```
 
-The contract profile strips symbols and optimizes for size. The current PoC
-builds to roughly a few hundred KiB before `wasm-opt`; gas still needs to be
-measured on the target chain.
+The contract profile strips symbols and optimizes for size. With the compressed
+verifier included, the current PoC builds to under 1 MiB before `wasm-opt`; gas
+and memory still need to be measured on the target chain.
 
 ## Notes
 

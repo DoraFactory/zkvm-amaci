@@ -5,7 +5,8 @@ use amaci_proof_core::{
 use amaci_proof_core::{execute_proof_logic, ProverInput, PublicOutput};
 use sp1_sdk::blocking::{ProveRequest, Prover, ProverClient, SP1Stdin};
 use sp1_sdk::ProvingKey;
-use sp1_sdk::{include_elf, HashableKey, SP1ProofWithPublicValues, SP1PublicValues};
+use sp1_sdk::{include_elf, HashableKey, SP1Proof, SP1ProofWithPublicValues, SP1PublicValues};
+use sp1_verifier::compressed::SP1CompressedVerifierRaw;
 use sp1_verifier::{Groth16Verifier, GROTH16_VK_BYTES};
 use std::env;
 use std::error::Error;
@@ -42,6 +43,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             public_bytes_path.as_deref(),
             vkey_path.as_deref(),
         )?,
+        Command::ProveCompressed {
+            circuit,
+            proof_path,
+            proof_bytes_path,
+            public_path,
+            public_bytes_path,
+            vkey_path,
+        } => prove_compressed(
+            &circuit,
+            proof_path.as_deref(),
+            proof_bytes_path.as_deref(),
+            public_path.as_deref(),
+            public_bytes_path.as_deref(),
+            vkey_path.as_deref(),
+        )?,
         Command::Verify {
             proof_path,
             public_path,
@@ -57,6 +73,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             proof_bytes_path.as_deref(),
             public_bytes_path.as_deref(),
             vkey_hash.as_deref(),
+            public_path.as_deref(),
+        )?,
+        Command::VerifyCompressed {
+            proof_path,
+            proof_bytes_path,
+            public_bytes_path,
+            vkey_path,
+            public_path,
+        } => verify_compressed(
+            proof_path.as_deref(),
+            proof_bytes_path.as_deref(),
+            public_bytes_path.as_deref(),
+            vkey_path.as_deref(),
             public_path.as_deref(),
         )?,
         Command::Execute {
@@ -82,6 +111,14 @@ enum Command {
         public_bytes_path: Option<PathBuf>,
         vkey_path: Option<PathBuf>,
     },
+    ProveCompressed {
+        circuit: String,
+        proof_path: Option<PathBuf>,
+        proof_bytes_path: Option<PathBuf>,
+        public_path: Option<PathBuf>,
+        public_bytes_path: Option<PathBuf>,
+        vkey_path: Option<PathBuf>,
+    },
     Verify {
         proof_path: PathBuf,
         public_path: Option<PathBuf>,
@@ -91,6 +128,13 @@ enum Command {
         proof_bytes_path: Option<PathBuf>,
         public_bytes_path: Option<PathBuf>,
         vkey_hash: Option<String>,
+        public_path: Option<PathBuf>,
+    },
+    VerifyCompressed {
+        proof_path: Option<PathBuf>,
+        proof_bytes_path: Option<PathBuf>,
+        public_bytes_path: Option<PathBuf>,
+        vkey_path: Option<PathBuf>,
         public_path: Option<PathBuf>,
     },
     Execute {
@@ -104,10 +148,14 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
         parse_verify_command(&args[1..])
     } else if args.first().map(String::as_str) == Some("verify-groth16") {
         parse_verify_groth16_command(&args[1..])
+    } else if args.first().map(String::as_str) == Some("verify-compressed") {
+        parse_verify_compressed_command(&args[1..])
     } else if args.first().map(String::as_str) == Some("execute") {
         parse_execute_command(&args[1..])
     } else if args.first().map(String::as_str) == Some("prove-groth16") {
         parse_prove_groth16_command(&args[1..])
+    } else if args.first().map(String::as_str) == Some("prove-compressed") {
+        parse_prove_compressed_command(&args[1..])
     } else if args.first().map(String::as_str) == Some("prove") {
         parse_prove_command(&args[1..])
     } else {
@@ -213,6 +261,62 @@ fn parse_prove_groth16_command(args: &[String]) -> Result<Command, Box<dyn Error
     })
 }
 
+fn parse_prove_compressed_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
+    let mut circuit = DEFAULT_CIRCUIT.to_string();
+    let mut proof_path = None;
+    let mut proof_bytes_path = None;
+    let mut public_path = None;
+    let mut public_bytes_path = None;
+    let mut vkey_path = None;
+    let mut i = 0;
+
+    if args.first().is_some_and(|arg| !arg.starts_with("--")) {
+        circuit = args[0].clone();
+        i = 1;
+    }
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--proof" => {
+                i += 1;
+                proof_path = Some(next_path(args, i, "--proof")?);
+            }
+            "--proof-bytes" => {
+                i += 1;
+                proof_bytes_path = Some(next_path(args, i, "--proof-bytes")?);
+            }
+            "--public" => {
+                i += 1;
+                public_path = Some(next_path(args, i, "--public")?);
+            }
+            "--public-bytes" => {
+                i += 1;
+                public_bytes_path = Some(next_path(args, i, "--public-bytes")?);
+            }
+            "--vkey" => {
+                i += 1;
+                vkey_path = Some(next_path(args, i, "--vkey")?);
+            }
+            "--help" | "-h" => return Err(usage().into()),
+            other => {
+                return Err(
+                    format!("unknown prove-compressed argument: {other}\n\n{}", usage()).into(),
+                );
+            }
+        }
+        i += 1;
+    }
+
+    Ok(Command::ProveCompressed {
+        circuit,
+        proof_path,
+        proof_bytes_path,
+        public_path,
+        public_bytes_path,
+        vkey_path,
+    })
+}
+
 fn parse_verify_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     let mut proof_path = None;
     let mut public_path = None;
@@ -300,6 +404,65 @@ fn parse_verify_groth16_command(args: &[String]) -> Result<Command, Box<dyn Erro
     })
 }
 
+fn parse_verify_compressed_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
+    let mut proof_path = None;
+    let mut proof_bytes_path = None;
+    let mut public_bytes_path = None;
+    let mut vkey_path = None;
+    let mut public_path = None;
+    let mut i = 0;
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--proof" => {
+                i += 1;
+                proof_path = Some(next_path(args, i, "--proof")?);
+            }
+            "--proof-bytes" => {
+                i += 1;
+                proof_bytes_path = Some(next_path(args, i, "--proof-bytes")?);
+            }
+            "--public-bytes" => {
+                i += 1;
+                public_bytes_path = Some(next_path(args, i, "--public-bytes")?);
+            }
+            "--vkey" => {
+                i += 1;
+                vkey_path = Some(next_path(args, i, "--vkey")?);
+            }
+            "--public" => {
+                i += 1;
+                public_path = Some(next_path(args, i, "--public")?);
+            }
+            "--help" | "-h" => return Err(usage().into()),
+            other => {
+                return Err(
+                    format!("unknown verify-compressed argument: {other}\n\n{}", usage()).into(),
+                );
+            }
+        }
+        i += 1;
+    }
+
+    if proof_path.is_none()
+        && (proof_bytes_path.is_none() || public_bytes_path.is_none() || vkey_path.is_none())
+    {
+        return Err(format!(
+            "verify-compressed requires either --proof PATH or --proof-bytes PATH --public-bytes PATH --vkey PATH\n\n{}",
+            usage()
+        )
+        .into());
+    }
+
+    Ok(Command::VerifyCompressed {
+        proof_path,
+        proof_bytes_path,
+        public_bytes_path,
+        vkey_path,
+        public_path,
+    })
+}
+
 fn parse_execute_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     let mut circuit = DEFAULT_CIRCUIT.to_string();
     let mut public_path = None;
@@ -343,7 +506,7 @@ fn next_value(args: &[String], index: usize, flag: &str) -> Result<String, Box<d
 }
 
 fn usage() -> &'static str {
-    "usage:\n  amaci-proof-sp1-host [circuit]\n  amaci-proof-sp1-host execute [circuit] [--public PATH]\n  amaci-proof-sp1-host prove [circuit] [--proof PATH] [--public PATH]\n  amaci-proof-sp1-host prove-groth16 [circuit] [--proof PATH] [--proof-bytes PATH] [--public PATH] [--public-bytes PATH] [--vkey PATH]\n  amaci-proof-sp1-host verify --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof-bytes PATH --public-bytes PATH --vkey HASH [--public PATH]"
+    "usage:\n  amaci-proof-sp1-host [circuit]\n  amaci-proof-sp1-host execute [circuit] [--public PATH]\n  amaci-proof-sp1-host prove [circuit] [--proof PATH] [--public PATH]\n  amaci-proof-sp1-host prove-compressed [circuit] [--proof PATH] [--proof-bytes PATH] [--public PATH] [--public-bytes PATH] [--vkey PATH]\n  amaci-proof-sp1-host prove-groth16 [circuit] [--proof PATH] [--proof-bytes PATH] [--public PATH] [--public-bytes PATH] [--vkey PATH]\n  amaci-proof-sp1-host verify --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-compressed --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-compressed --proof-bytes PATH --public-bytes PATH --vkey PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof-bytes PATH --public-bytes PATH --vkey HASH [--public PATH]"
 }
 
 fn prove(
@@ -445,6 +608,71 @@ fn prove_groth16(
 
     if let Some(path) = vkey_path {
         write_parented(path, format!("{vkey_hash}\n").as_bytes())?;
+        println!("vkey={}", path.display());
+    }
+
+    Ok(())
+}
+
+fn prove_compressed(
+    circuit: &str,
+    proof_path: Option<&Path>,
+    proof_bytes_path: Option<&Path>,
+    public_path: Option<&Path>,
+    public_bytes_path: Option<&Path>,
+    vkey_path: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
+    let input = built_in_input(circuit)?;
+    let expected_output = execute_proof_logic(&input)?;
+
+    let client = ProverClient::builder().cpu().build();
+    let pk = client.setup(AMACI_SP1_ELF)?;
+    let mut stdin = SP1Stdin::new();
+    let input_bytes = encode_input(&input);
+    println!("input_bytes={}", input_bytes.len());
+    stdin.write_vec(input_bytes);
+
+    let proof = client.prove(&pk, stdin).compressed().run()?;
+    client.verify(&proof, pk.verifying_key(), None)?;
+    println!("public_bytes={}", proof.public_values.as_slice().len());
+    let proof_bytes = compressed_proof_bytes(&proof)?;
+    let vkey_hash = compressed_vkey_hash_bytes(pk.verifying_key());
+    println!("compressed_proof_bytes={}", proof_bytes.len());
+    println!("compressed_vkey_bytes={}", vkey_hash.len());
+    verify_compressed_artifacts(&proof_bytes, proof.public_values.as_slice(), &vkey_hash)?;
+    let journal_output = decode_sp1_public_output(&proof)?;
+    if journal_output != expected_output {
+        return Err("compressed public values did not match native proof-core output".into());
+    }
+
+    println!("circuit={circuit}");
+    println!("vkey_hash={}", pk.verifying_key().bytes32());
+    println!("compressed verify ok");
+    let public_json = serde_json::to_string_pretty(&journal_output)?;
+    println!("{public_json}");
+
+    if let Some(path) = proof_path {
+        write_parented_proof(path, &proof)?;
+        println!("proof={}", path.display());
+    }
+
+    if let Some(path) = proof_bytes_path {
+        write_parented(path, &proof_bytes)?;
+        println!("proof_bytes={}", path.display());
+    }
+
+    if let Some(path) = public_path {
+        write_parented(path, public_json.as_bytes())?;
+        println!("public={}", path.display());
+    }
+
+    if let Some(path) = public_bytes_path {
+        write_parented(path, proof.public_values.as_slice())?;
+        println!("public_bytes_path={}", path.display());
+    }
+
+    if let Some(path) = vkey_path {
+        write_parented(path, &vkey_hash)?;
         println!("vkey={}", path.display());
     }
 
@@ -556,6 +784,73 @@ fn verify_groth16(
     }
 
     Ok(())
+}
+
+fn verify_compressed(
+    proof_path: Option<&Path>,
+    proof_bytes_path: Option<&Path>,
+    public_bytes_path: Option<&Path>,
+    vkey_path: Option<&Path>,
+    public_path: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
+    let (proof_bytes, public_values, vkey_hash) = if let Some(path) = proof_path {
+        let proof = SP1ProofWithPublicValues::load(path)?;
+        let client = ProverClient::builder().cpu().build();
+        let pk = client.setup(AMACI_SP1_ELF)?;
+        client.verify(&proof, pk.verifying_key(), None)?;
+        (
+            compressed_proof_bytes(&proof)?,
+            proof.public_values.to_vec(),
+            compressed_vkey_hash_bytes(pk.verifying_key()),
+        )
+    } else {
+        let proof_bytes_path = proof_bytes_path.expect("validated proof bytes path exists");
+        let public_bytes_path = public_bytes_path.expect("validated public bytes path exists");
+        let vkey_path = vkey_path.expect("validated vkey path exists");
+        (
+            fs::read(proof_bytes_path)?,
+            fs::read(public_bytes_path)?,
+            fs::read(vkey_path)?,
+        )
+    };
+
+    verify_compressed_artifacts(&proof_bytes, &public_values, &vkey_hash)?;
+    let journal_output = decode_public_output(&public_values)?;
+
+    println!("compressed proof verify ok");
+    println!("compressed_proof_bytes={}", proof_bytes.len());
+    println!("public_bytes={}", public_values.len());
+    println!("compressed_vkey_bytes={}", vkey_hash.len());
+    let public_json = serde_json::to_string_pretty(&journal_output)?;
+    println!("{public_json}");
+
+    if let Some(path) = public_path {
+        write_parented(path, public_json.as_bytes())?;
+        println!("public={}", path.display());
+    }
+
+    Ok(())
+}
+
+fn compressed_proof_bytes(proof: &SP1ProofWithPublicValues) -> Result<Vec<u8>, Box<dyn Error>> {
+    match &proof.proof {
+        SP1Proof::Compressed(_) => Ok(bincode::serialize(&proof.proof)?),
+        other => Err(format!("expected compressed proof, got {other}").into()),
+    }
+}
+
+fn compressed_vkey_hash_bytes(vk: &impl HashableKey) -> Vec<u8> {
+    bincode::serialize(&vk.hash_koalabear())
+        .expect("serializing compressed vkey hash should not fail")
+}
+
+fn verify_compressed_artifacts(
+    proof_bytes: &[u8],
+    public_values: &[u8],
+    vkey_hash: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    SP1CompressedVerifierRaw::verify_with_public_values(proof_bytes, public_values, vkey_hash)
+        .map_err(|err| format!("compressed verification failed: {err}").into())
 }
 
 fn verify_groth16_artifacts(

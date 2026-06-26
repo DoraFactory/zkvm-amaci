@@ -8,4 +8,7 @@ pub enum ContractError {
 
     #[error("SP1 Groth16 verification failed: {reason}")]
     Groth16Verification { reason: String },
+
+    #[error("SP1 compressed verification failed: {reason}")]
+    CompressedVerification { reason: String },
 }
