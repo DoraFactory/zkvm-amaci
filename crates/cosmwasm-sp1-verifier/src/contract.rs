@@ -100,6 +100,8 @@ pub fn query(_deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn empty_proof_is_rejected() {
@@ -111,5 +113,99 @@ mod tests {
     fn empty_compressed_proof_is_rejected() {
         let err = verify_sp1_compressed(&[], &[], &[]).unwrap_err();
         assert!(matches!(err, ContractError::CompressedVerification { .. }));
+    }
+
+    #[test]
+    fn instantiate_and_query_report_compressed_support() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info("sender", &[]);
+
+        let response = instantiate(deps.as_mut(), env.clone(), info, InstantiateMsg {}).unwrap();
+        assert_eq!(response.attributes[0].key, "method");
+        assert_eq!(response.attributes[0].value, "instantiate");
+
+        let response = query(deps.as_ref(), env, QueryMsg::VerifierInfo {}).unwrap();
+        let info: VerifierInfoResponse = cosmwasm_std::from_json(response).unwrap();
+        assert_eq!(info.backend, "sp1");
+        assert!(info.proof_mode.contains("compressed"));
+    }
+
+    #[test]
+    fn execute_compressed_rejects_empty_proof() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info("sender", &[]);
+
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::VerifyCompressed {
+                proof: Binary::default(),
+                public_values: Binary::default(),
+                vkey_hash: Binary::default(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::CompressedVerification { .. }));
+    }
+
+    #[test]
+    fn compressed_fixture_verifies_when_artifacts_exist() {
+        let Some(paths) = compressed_fixture_paths() else {
+            eprintln!("skipping compressed fixture test: artifacts not found");
+            return;
+        };
+
+        let proof = std::fs::read(&paths.proof).unwrap();
+        let public_values = std::fs::read(&paths.public_values).unwrap();
+        let vkey_hash = std::fs::read(&paths.vkey_hash).unwrap();
+
+        verify_sp1_compressed(&proof, &public_values, &vkey_hash).unwrap();
+
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info("sender", &[]);
+        let response = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::VerifyCompressed {
+                proof: proof.into(),
+                public_values: public_values.into(),
+                vkey_hash: vkey_hash.into(),
+            },
+        )
+        .unwrap();
+
+        assert!(response
+            .attributes
+            .iter()
+            .any(|attr| attr.key == "proof_mode" && attr.value == "compressed"));
+    }
+
+    struct CompressedFixturePaths {
+        proof: PathBuf,
+        public_values: PathBuf,
+        vkey_hash: PathBuf,
+    }
+
+    fn compressed_fixture_paths() -> Option<CompressedFixturePaths> {
+        let circuit = std::env::var("AMACI_COMPRESSED_FIXTURE")
+            .unwrap_or_else(|_| "process-messages-native-2-1-5-full".to_string());
+        let base = Path::new("sp1-proofs");
+        let paths = CompressedFixturePaths {
+            proof: base.join(format!("{circuit}.sp1-compressed-proof.bytes")),
+            public_values: base.join(format!("{circuit}.sp1-compressed.public.bin")),
+            vkey_hash: base.join(format!("{circuit}.sp1-compressed.vkey.bin")),
+        };
+
+        if paths.proof.exists() && paths.public_values.exists() && paths.vkey_hash.exists() {
+            Some(paths)
+        } else {
+            None
+        }
     }
 }
