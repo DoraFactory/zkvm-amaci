@@ -274,7 +274,7 @@ fn process_one(
     )?;
 
     let max_index = Field::from(pow5(5, input.state_tree_depth));
-    let state_index = if transform.is_valid {
+    let state_index = if transform.message_valid {
         command.state_index.clone()
     } else {
         &max_index - Field::one()
@@ -295,7 +295,7 @@ fn process_one(
         &input.active_state_root,
     )?;
 
-    let vote_index = if transform.is_valid {
+    let vote_index = if transform.message_valid {
         command.vote_option_index.clone()
     } else {
         Field::from(0u32)
@@ -362,6 +362,7 @@ fn process_one(
 }
 
 struct TransformResult {
+    message_valid: bool,
     is_valid: bool,
     new_pub_key: [Field; 2],
     new_balance: Field,
@@ -395,6 +396,7 @@ fn state_leaf_transformer(
     };
     let is_valid = !is_deactivated_odd && active && msg_valid.0;
     Ok(TransformResult {
+        message_valid: msg_valid.0,
         is_valid,
         new_pub_key: if is_valid {
             command.new_pub_key.clone()

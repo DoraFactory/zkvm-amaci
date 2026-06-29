@@ -1,0 +1,31 @@
+{
+  "name": "zkvm-amaci",
+  "version": "1.0.0",
+  "description": "Native zkVM implementation of the AMACI proof logic for RISC Zero and SP1.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build:round-contract": "PACKAGE=amaci-cosmwasm-round WASM_BASENAME=amaci_cosmwasm_round scripts/build_cosmwasm_contract.sh",
+    "fixture:five-signup": "cargo run -q -p amaci-proof-core --bin export_five_signup_round -- fixtures/five-signup-round",
+    "round:e2e:local": "node scripts/run_cosmwasm_round_e2e.mjs --manifest fixtures/round-e2e.local.example.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DoraFactory/zkvm-amaci.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/DoraFactory/zkvm-amaci/issues"
+  },
+  "homepage": "https://github.com/DoraFactory/zkvm-amaci#readme",
+  "dependencies": {
+    "@cosmjs/cosmwasm-stargate": "0.38.1",
+    "@cosmjs/encoding": "0.38.1",
+    "@cosmjs/proto-signing": "0.38.1",
+    "@cosmjs/stargate": "0.38.1"
+  }
+}

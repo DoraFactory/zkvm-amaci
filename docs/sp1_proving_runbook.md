@@ -121,6 +121,50 @@ Artifacts:
 This is the end-to-end PQC candidate path. It does not use the BN254
 Groth16/PLONK wrapper.
 
+### Real Five-Signup Round
+
+Generate all five real AMACI round compressed proofs on the high-performance
+machine:
+
+```bash
+cd ~/zkvm-amaci
+git pull --ff-only origin main
+mkdir -p logs metrics sp1-proofs
+
+nohup bash scripts/run_five_signup_sp1_compressed.sh \
+  > logs/five-signup-sp1-compressed-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+Watch:
+
+```bash
+tail -f $(ls -t logs/five-signup-sp1-compressed-*.out logs/sp1-compressed-five-signup-*.log 2>/dev/null | head -1)
+```
+
+The script runs these circuits:
+
+```text
+five-signup-process-deactivate
+five-signup-add-new-key
+five-signup-process-messages-full
+five-signup-tally-0
+five-signup-tally-1
+```
+
+For every circuit, success means the corresponding `logs/sp1-compressed-*.log`
+contains both `compressed proof verify ok` and
+`sp1 compressed public output match`.
+
+The script also writes CosmWasm execute messages:
+
+```text
+sp1-proofs/five-signup-*.verify-compressed.msg.json
+```
+
+Copy those files back to the local machine, then use
+`fixtures/round-e2e.five-signup.example.json` with
+`scripts/run_cosmwasm_round_e2e.mjs` to measure the real on-chain round cost.
+
 ## Groth16 Wrapper
 
 Generate a Groth16-wrapped proof and verify the raw on-chain artifacts:

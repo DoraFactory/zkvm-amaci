@@ -1,0 +1,54 @@
+{
+  "round_id": "five-signup-2-1-1-5",
+  "initial_signups": 5,
+  "final_signups": 6,
+  "expected_raw_results": [
+    1,
+    0,
+    0,
+    0,
+    10
+  ],
+  "stages": [
+    {
+      "name": "five-signup-process-deactivate",
+      "stage": "process_deactivate",
+      "circuit": "five-signup-process-deactivate",
+      "input_path": "five-signup-process-deactivate.input.json",
+      "public_path": "five-signup-process-deactivate.public.json",
+      "compressed_msg_path": "five-signup-process-deactivate.verify-compressed.msg.json"
+    },
+    {
+      "name": "five-signup-add-new-key",
+      "stage": "add_new_key",
+      "circuit": "five-signup-add-new-key",
+      "input_path": "five-signup-add-new-key.input.json",
+      "public_path": "five-signup-add-new-key.public.json",
+      "compressed_msg_path": "five-signup-add-new-key.verify-compressed.msg.json"
+    },
+    {
+      "name": "five-signup-process-messages-full",
+      "stage": "process_messages",
+      "circuit": "five-signup-process-messages-full",
+      "input_path": "five-signup-process-messages-full.input.json",
+      "public_path": "five-signup-process-messages-full.public.json",
+      "compressed_msg_path": "five-signup-process-messages-full.verify-compressed.msg.json"
+    },
+    {
+      "name": "five-signup-tally-0",
+      "stage": "tally",
+      "circuit": "five-signup-tally-0",
+      "input_path": "five-signup-tally-0.input.json",
+      "public_path": "five-signup-tally-0.public.json",
+      "compressed_msg_path": "five-signup-tally-0.verify-compressed.msg.json"
+    },
+    {
+      "name": "five-signup-tally-1",
+      "stage": "tally",
+      "circuit": "five-signup-tally-1",
+      "input_path": "five-signup-tally-1.input.json",
+      "public_path": "five-signup-tally-1.public.json",
+      "compressed_msg_path": "five-signup-tally-1.verify-compressed.msg.json"
+    }
+  ]
+}

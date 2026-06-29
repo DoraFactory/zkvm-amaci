@@ -7,6 +7,7 @@ members = [
     "crates/proof-sp1-host",
     "crates/proof-sp1-program",
     "crates/cosmwasm-sp1-verifier",
+    "crates/cosmwasm-amaci-round",
 ]
 resolver = "2"
 

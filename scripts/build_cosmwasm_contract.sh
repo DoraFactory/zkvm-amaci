@@ -4,7 +4,8 @@ set -euo pipefail
 PACKAGE="${PACKAGE:-amaci-cosmwasm-sp1-verifier}"
 TOOLCHAIN="${RUST_TOOLCHAIN_NIGHTLY:-nightly}"
 TARGET="${TARGET:-wasm32-unknown-unknown}"
-WASM_PATH="target/${TARGET}/contract/amaci_cosmwasm_sp1_verifier.wasm"
+WASM_BASENAME="${WASM_BASENAME:-amaci_cosmwasm_sp1_verifier}"
+WASM_PATH="target/${TARGET}/contract/${WASM_BASENAME}.wasm"
 
 rustup target add "${TARGET}" --toolchain "${TOOLCHAIN}" >/dev/null
 rustup component add rust-src --toolchain "${TOOLCHAIN}" >/dev/null

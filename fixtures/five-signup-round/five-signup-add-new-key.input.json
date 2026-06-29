@@ -1,0 +1,63 @@
+{
+  "AddNewKey": {
+    "state_tree_depth": 2,
+    "input_hash": "0x952e82fc50f0d0771854b76b31b599b088017efd2c7663de1dec6c931c392299",
+    "coord_pub_key": [
+      "0x10aee4876eebc9aab2f3524ab56a05ab18e02735d104ec98530bc4fe96157514",
+      "0xc3f3031c73f8e396819ee9ea63facbbdabb2e0f129ac52d3d616d80577fdcd33"
+    ],
+    "deactivate_root": "0x61ba6d91afee3ba2565cb64e9885d61b99f942435201fc6bdaeac9f69560adb7",
+    "deactivate_index": "0x12",
+    "deactivate_leaf": "0x3c53a6434fda061756d0108c1be3a72c7ce3f3d3ff5ab666218a55a93cab12fd",
+    "c1": [
+      "0x0",
+      "0x0"
+    ],
+    "c2": [
+      "0x0",
+      "0x0"
+    ],
+    "random_val": "0x2a",
+    "d1": [
+      "0x46bcc226292eb34631bc1a2f1ef1eabf239173af5cc2fd8a9f9764abb8f81524",
+      "0x99f3e07fbf58af63d05ecb7a6737365f620c7d0ff9a553bdf59cd13a2bf52871"
+    ],
+    "d2": [
+      "0xffedaa78dc4a5d3b7a2f0f0e54073be7f3fabbdf516794b4794a08c05f5a70b7",
+      "0xba3a3d19cab5b6a5305f51c3b407223d06789f7ac50abc3e5af327252dc3aa3f"
+    ],
+    "deactivate_leaf_path_elements": [
+      [
+        "0x0",
+        "0x0",
+        "0x4ca410dbcdb1ac84e0a0947a9c8e078764d3a79b924624a988cc8531c4fc3564",
+        "0x0"
+      ],
+      [
+        "0x30f70a6acc3104c27dffecc4fa5f63d84481aa1afff2ae037f142eace3b37150",
+        "0x30f70a6acc3104c27dffecc4fa5f63d84481aa1afff2ae037f142eace3b37150",
+        "0x30f70a6acc3104c27dffecc4fa5f63d84481aa1afff2ae037f142eace3b37150",
+        "0x30f70a6acc3104c27dffecc4fa5f63d84481aa1afff2ae037f142eace3b37150"
+      ],
+      [
+        "0xb24e1ba0c2878ec824072f7ceb63d914327d020e04cb0b74e0a899bdd8f4f83f",
+        "0xb24e1ba0c2878ec824072f7ceb63d914327d020e04cb0b74e0a899bdd8f4f83f",
+        "0xb24e1ba0c2878ec824072f7ceb63d914327d020e04cb0b74e0a899bdd8f4f83f",
+        "0xb24e1ba0c2878ec824072f7ceb63d914327d020e04cb0b74e0a899bdd8f4f83f"
+      ],
+      [
+        "0xb58e91bf521a2d80e4dfe4cc93d1910b66495e483aca199e4844832b4fbe5673",
+        "0xb58e91bf521a2d80e4dfe4cc93d1910b66495e483aca199e4844832b4fbe5673",
+        "0xb58e91bf521a2d80e4dfe4cc93d1910b66495e483aca199e4844832b4fbe5673",
+        "0xb58e91bf521a2d80e4dfe4cc93d1910b66495e483aca199e4844832b4fbe5673"
+      ]
+    ],
+    "nullifier": "0xbcf3533e30aa21b63db16b2bebb4e3aa5a5b6aad7ad3caadea88d76f372f83a6",
+    "old_private_key": "0x1775",
+    "new_pub_key": [
+      "0x5af169f47367583092b8a0ca72c42062873c0347a9bf12baca1a763811ec3e29",
+      "0xf99ac6a45479905d11faecb59695675ca56eee0f64badd6ee95b2cc54b1c076d"
+    ],
+    "poll_id": "0x1"
+  }
+}

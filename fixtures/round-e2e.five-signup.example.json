@@ -1,0 +1,48 @@
+{
+  "roundId": "five-signup-2-1-1-5",
+  "rpc": "http://127.0.0.1:26657",
+  "chainId": "zkvm-amaci-devnet",
+  "prefix": "dora",
+  "denom": "peaka",
+  "mnemonicFile": ".devnet/dorad/dev-key.json",
+  "wasmPath": "target/wasm32-unknown-unknown/contract/amaci_cosmwasm_round.wasm",
+  "label": "zkvm-amaci-five-signup-round-e2e",
+  "signGasPricePeaka": "0",
+  "costGasPricePeaka": "100000000000",
+  "uploadGas": "auto",
+  "instantiateGas": "auto",
+  "executeGas": "300000000",
+  "expected": {
+    "process_deactivate": 1,
+    "add_new_key": 1,
+    "process_messages": 1,
+    "tally": 2
+  },
+  "stages": [
+    {
+      "label": "process_deactivate",
+      "stage": "process_deactivate",
+      "msgPath": "sp1-proofs/five-signup-process-deactivate.verify-compressed.msg.json"
+    },
+    {
+      "label": "add_new_key",
+      "stage": "add_new_key",
+      "msgPath": "sp1-proofs/five-signup-add-new-key.verify-compressed.msg.json"
+    },
+    {
+      "label": "process_messages_full",
+      "stage": "process_messages",
+      "msgPath": "sp1-proofs/five-signup-process-messages-full.verify-compressed.msg.json"
+    },
+    {
+      "label": "tally_0",
+      "stage": "tally",
+      "msgPath": "sp1-proofs/five-signup-tally-0.verify-compressed.msg.json"
+    },
+    {
+      "label": "tally_1",
+      "stage": "tally",
+      "msgPath": "sp1-proofs/five-signup-tally-1.verify-compressed.msg.json"
+    }
+  ]
+}

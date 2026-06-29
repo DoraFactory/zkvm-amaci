@@ -15,6 +15,7 @@ use amaci_proof_core::packing::{
     unpack_process_messages_packed_vals, unpack_tally_packed_vals,
 };
 use amaci_proof_core::public_output::public_value;
+use amaci_proof_core::round_fixture::five_signup_round_fixture;
 use amaci_proof_core::{execute_proof_logic, Field, ProverInput, PublicOutput};
 use num_traits::One;
 
@@ -247,4 +248,42 @@ fn compact_codec_roundtrips_all_built_in_inputs() {
         let encoded_output = encode_public_output(&output);
         assert_eq!(decode_public_output(&encoded_output).unwrap(), output);
     }
+}
+
+#[test]
+fn five_signup_round_fixture_executes_and_links_public_state() {
+    let fixture = five_signup_round_fixture().unwrap();
+    assert_eq!(fixture.initial_signups, 5);
+    assert_eq!(fixture.final_signups, 6);
+    assert_eq!(fixture.expected_raw_results, [1, 0, 0, 0, 10]);
+    assert_eq!(fixture.stages.len(), 5);
+
+    let outputs = fixture
+        .stages
+        .iter()
+        .map(|stage| execute_proof_logic(&stage.input).unwrap())
+        .collect::<Vec<_>>();
+
+    let PublicOutput::ProcessDeactivate(deactivate) = &outputs[0] else {
+        panic!("stage 0 must be process deactivate");
+    };
+    let PublicOutput::AddNewKey(add_key) = &outputs[1] else {
+        panic!("stage 1 must be add new key");
+    };
+    let PublicOutput::ProcessMessages(messages_full) = &outputs[2] else {
+        panic!("stage 2 must be process messages");
+    };
+    let PublicOutput::TallyVotes(tally_0) = &outputs[3] else {
+        panic!("stage 3 must be tally");
+    };
+    let PublicOutput::TallyVotes(tally_1) = &outputs[4] else {
+        panic!("stage 4 must be tally");
+    };
+
+    assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
+    assert_eq!(messages_full.new_state_commitment, tally_0.state_commitment);
+    assert_eq!(
+        tally_0.new_tally_commitment,
+        tally_1.current_tally_commitment
+    );
 }

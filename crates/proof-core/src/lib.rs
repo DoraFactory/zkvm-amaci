@@ -15,6 +15,7 @@ pub mod merkle;
 pub mod native_types;
 pub mod packing;
 pub mod public_output;
+pub mod round_fixture;
 pub mod sample_inputs;
 pub mod types;
 

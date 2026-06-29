@@ -20,11 +20,17 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# macOS
+.DS_Store
+
 # Local secrets and generated run artifacts
 .env
 .deploy/
+.devnet/
 deployments/
 logs/
 metrics/
+node_modules/
 proofs/
+round-e2e-results/
 sp1-proofs/

@@ -14,6 +14,10 @@ use crate::{
 use num_traits::ToPrimitive;
 
 pub fn built_in_input(name: &str) -> ProofResult<Option<ProverInput>> {
+    if let Some(input) = crate::round_fixture::five_signup_stage_input(name)? {
+        return Ok(Some(input));
+    }
+
     let input = match name {
         "process-messages-native-2-1-5-full" => {
             ProverInput::ProcessMessages(process_messages_native_2_1_5_full()?)
@@ -35,7 +39,7 @@ pub fn built_in_input(name: &str) -> ProofResult<Option<ProverInput>> {
 }
 
 pub fn supported_inputs() -> &'static str {
-    "process-messages-native-1-1, process-messages-native-2-1-5, process-messages-native-2-1-5-full, tally-votes-native-2-1-1, process-deactivate-native-2-5, add-new-key-native-2"
+    "process-messages-native-1-1, process-messages-native-2-1-5, process-messages-native-2-1-5-full, tally-votes-native-2-1-1, process-deactivate-native-2-5, add-new-key-native-2, five-signup-process-deactivate, five-signup-add-new-key, five-signup-process-messages-full, five-signup-tally-0, five-signup-tally-1"
 }
 
 pub fn process_messages_native_1_1() -> ProofResult<ProcessMessagesInput> {
