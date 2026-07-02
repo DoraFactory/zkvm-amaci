@@ -60,6 +60,29 @@ cargo run --release -p amaci-proof-core --bin native_profile -- \
   process-messages-native-2-1-5-full --iters 100
 ```
 
+Run the current SP1 profiling suite. `native` is cheap and can run locally;
+`execute` records SP1 instruction/memory data without generating a proof;
+`compressed` generates and verifies compressed STARK proofs.
+
+```bash
+# Local quick sanity run.
+NATIVE_ITERS=20 scripts/run_sp1_profile_suite.sh native
+
+# High-performance machine: SP1 execute profile for all hot AMACI stages.
+nohup env NATIVE_ITERS=200 \
+  scripts/run_sp1_profile_suite.sh execute \
+  > logs/sp1-profile-execute-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+
+# High-performance machine: compressed proof baseline.
+nohup env NATIVE_ITERS=200 \
+  scripts/run_sp1_profile_suite.sh compressed \
+  > logs/sp1-profile-compressed-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+The suite writes `metrics/sp1-profile-suite-*.summary.tsv` with native
+execution time, input/public bytes, SP1 instruction counts, memory, and proof
+artifact sizes.
+
 ## Bench / Metrics Runner
 
 For high-performance machines, use the bench runner so logs, timing, memory,

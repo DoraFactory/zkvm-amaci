@@ -214,8 +214,7 @@ fn process_batch(
     packed: &crate::packing::ProcessMessagesPackedVals,
 ) -> ProofResult<Field> {
     let vo_tree_zero_root = zero_root(input.vote_option_tree_depth)?;
-    let mut state_roots = vec![Field::from(0u32); input.batch_size + 1];
-    state_roots[input.batch_size] = input.current_state_root.clone();
+    let mut next_state_root = input.current_state_root;
 
     for i in (0..input.batch_size).rev() {
         let is_empty = input.enc_pub_keys[i][0].is_zero();
@@ -228,17 +227,17 @@ fn process_batch(
                 &input.enc_pub_keys[i],
             )?
         };
-        state_roots[i] = process_one(
+        next_state_root = process_one(
             input,
             packed,
             &vo_tree_zero_root,
             i,
-            &state_roots[i + 1],
+            &next_state_root,
             &command,
         )?;
     }
 
-    Ok(state_roots[0].clone())
+    Ok(next_state_root)
 }
 
 fn empty_command() -> Command {

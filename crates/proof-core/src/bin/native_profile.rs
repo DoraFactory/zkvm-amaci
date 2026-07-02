@@ -1,3 +1,4 @@
+use amaci_proof_core::codec::{encode_input, encode_public_output};
 use amaci_proof_core::sample_inputs;
 use amaci_proof_core::{execute_proof_logic, ProverInput, PublicOutput};
 use std::env;
@@ -34,6 +35,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("total_execute_ms={:.3}", millis(total));
     println!("avg_execute_ms={:.3}", millis(total) / config.iters as f64);
     println!("output={}", output_name(&output));
+    println!("input_bytes={}", encode_input(&input).len());
+    println!("public_bytes={}", encode_public_output(&output).len());
     println!("input_hash={}", input_hash(&input));
     Ok(())
 }

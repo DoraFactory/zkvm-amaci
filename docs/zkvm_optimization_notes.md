@@ -42,6 +42,16 @@ Current optimization targets still worth measuring:
 
 - measure proof memory and time after the fixed-width `U256` / `[u8; 32]`
   public-output and compact journal refactor;
+- use `scripts/run_sp1_profile_suite.sh` to capture native, SP1 execute, and
+  compressed-proof metrics for every hot AMACI stage before adding recursion;
+- prioritize `processMessages` and `tally`, because their proof count grows with
+  message and signup volume;
 - add separate fixed vote-row types if future circuit sizes use
   `vote_option_tree_depth > 1`;
 - add memory/time snapshots for RISC Zero and SP1 after every proof run.
+
+Completed follow-up optimization:
+
+- `processMessages` now rolls a single `next_state_root` through the reverse
+  batch loop instead of allocating a `batch_size + 1` vector of intermediate
+  roots.

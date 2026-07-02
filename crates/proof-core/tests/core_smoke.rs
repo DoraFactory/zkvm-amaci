@@ -17,7 +17,7 @@ use amaci_proof_core::packing::{
 use amaci_proof_core::public_output::public_value;
 use amaci_proof_core::round_fixture::five_signup_round_fixture;
 use amaci_proof_core::{execute_proof_logic, Field, ProverInput, PublicOutput};
-use num_traits::One;
+use num_traits::{One, ToPrimitive};
 
 fn assert_invalid_length(error: ProofError, expected_name: &'static str) {
     match error {
@@ -280,6 +280,19 @@ fn five_signup_round_fixture_executes_and_links_public_state() {
         panic!("stage 4 must be tally");
     };
 
+    let mut final_raw_results = [0u128; 5];
+    for stage in &fixture.stages {
+        let ProverInput::TallyVotes(input) = &stage.input else {
+            continue;
+        };
+        for vote_row in &input.votes {
+            for (idx, vote) in vote_row.iter().enumerate() {
+                final_raw_results[idx] += vote.to_u128().expect("fixture vote fits in u128");
+            }
+        }
+    }
+
+    assert_eq!(final_raw_results, fixture.expected_raw_results);
     assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
     assert_eq!(messages_full.new_state_commitment, tally_0.state_commitment);
     assert_eq!(

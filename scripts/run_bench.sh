@@ -47,6 +47,41 @@ stat_size() {
   fi
 }
 
+last_log_value() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { value = $2 } END { if (value != "") print value; else print "missing" }' "$log"
+}
+
+max_rss_kbytes() {
+  if [[ ! -s "$time_out" ]]; then
+    echo "missing"
+    return
+  fi
+  awk -F: '
+    /Maximum resident set size/ {
+      gsub(/^[ \t]+/, "", $2)
+      if (($2 + 0) > max) max = $2 + 0
+    }
+    END { if (max > 0) print max; else print "missing" }
+  ' "$time_out"
+}
+
+elapsed_wall_values() {
+  if [[ ! -s "$time_out" ]]; then
+    echo "missing"
+    return
+  fi
+  awk -F: '
+    /Elapsed \(wall clock\) time/ {
+      value = $2
+      for (i = 3; i <= NF; i++) value = value ":" $i
+      gsub(/^[ \t]+/, "", value)
+      values = values ? values "," value : value
+    }
+    END { if (values != "") print values; else print "missing" }
+  ' "$time_out"
+}
+
 run_timed() {
   local label="$1"
   shift
@@ -69,6 +104,14 @@ write_common_metrics() {
     echo "stamp=$stamp"
     echo "log=$log"
     echo "time_log=$time_out"
+    echo "elapsed_wall_values=$(elapsed_wall_values)"
+    echo "max_rss_kbytes=$(max_rss_kbytes)"
+    echo "input_bytes=$(last_log_value input_bytes)"
+    echo "public_values_bytes=$(last_log_value public_bytes)"
+    echo "instructions=$(last_log_value instructions)"
+    echo "syscalls=$(last_log_value syscalls)"
+    echo "touched_memory_addresses=$(last_log_value touched_memory_addresses)"
+    echo "gas=$(last_log_value gas)"
   } >> "$metrics"
 }
 
