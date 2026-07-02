@@ -1,7 +1,7 @@
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, hash2};
 use crate::crypto::{
-    decrypt_deactivation_flag, decrypt_without_check, ecdh_formatted_priv_key, private_to_pub_key,
-    verify_command_signature,
+    decrypt_deactivation_flag, decrypt_without_check_array, ecdh_formatted_priv_key,
+    private_to_pub_key, verify_command_signature,
 };
 use crate::error::{ProofError, ProofResult};
 use crate::field::{ensure_bool, pow5, Field};
@@ -189,7 +189,7 @@ pub fn message_to_command(
     enc_pub_key: &[Field; 2],
 ) -> ProofResult<Command> {
     let shared_key = ecdh_formatted_priv_key(enc_priv_key, enc_pub_key);
-    let decrypted = decrypt_without_check(message, &shared_key, &Field::from(0u32), 7)?;
+    let decrypted = decrypt_without_check_array::<9>(message, &shared_key, &Field::from(0u32), 7)?;
     let unpacked = unpack_element_high_to_low(&decrypted[0], 7)?;
     let new_vote_weight = decode_vote_weight_96(&unpacked[1], &unpacked[2], &unpacked[3])?;
     Ok(Command {
@@ -317,11 +317,11 @@ fn process_one(
         });
     }
 
-    let new_vote_weight_leaf = if transform.is_valid {
-        command.new_vote_weight.clone()
-    } else {
-        input.current_vote_weights[i].clone()
-    };
+    if !transform.is_valid {
+        return Ok(*current_state_root);
+    }
+
+    let new_vote_weight_leaf = command.new_vote_weight;
     let new_vote_option_root = root_from_path(
         &new_vote_weight_leaf,
         &vote_index,
@@ -331,21 +331,9 @@ fn process_one(
     let mut new_state_leaf: [Field; 10] = std::array::from_fn(|_| Field::from(0u32));
     new_state_leaf[0] = transform.new_pub_key[0].clone();
     new_state_leaf[1] = transform.new_pub_key[1].clone();
-    new_state_leaf[2] = if transform.is_valid {
-        transform.new_balance
-    } else {
-        state_leaf[2].clone()
-    };
-    new_state_leaf[3] = if transform.is_valid {
-        new_vote_option_root
-    } else {
-        state_leaf[3].clone()
-    };
-    new_state_leaf[4] = if transform.is_valid {
-        command.nonce.clone()
-    } else {
-        state_leaf[4].clone()
-    };
+    new_state_leaf[2] = transform.new_balance;
+    new_state_leaf[3] = new_vote_option_root;
+    new_state_leaf[4] = command.nonce;
     new_state_leaf[5] = state_leaf[5].clone();
     new_state_leaf[6] = state_leaf[6].clone();
     new_state_leaf[7] = state_leaf[7].clone();

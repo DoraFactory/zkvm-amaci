@@ -55,3 +55,6 @@ Completed follow-up optimization:
 - `processMessages` now rolls a single `next_state_root` through the reverse
   batch loop instead of allocating a `batch_size + 1` vector of intermediate
   roots.
+- `processMessages` uses a fixed decrypt output for the native command payload
+  and returns early for invalid/no-op messages after required witness checks.
+- `processDeactivate` skips empty slots instead of walking dummy Merkle paths.

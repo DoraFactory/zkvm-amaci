@@ -214,6 +214,15 @@ pub fn decrypt_without_check(
     decrypt_payload(ciphertext, key, nonce, len)
 }
 
+pub fn decrypt_without_check_array<const N: usize>(
+    ciphertext: &[Field],
+    key: &[Field; 2],
+    nonce: &Field,
+    len: usize,
+) -> ProofResult<[Field; N]> {
+    decrypt_payload_array(ciphertext, key, nonce, len)
+}
+
 fn decrypt_payload(
     ciphertext: &[Field],
     key: &[Field; 2],
@@ -239,6 +248,38 @@ fn decrypt_payload(
         ));
     }
     Ok(decrypted)
+}
+
+fn decrypt_payload_array<const N: usize>(
+    ciphertext: &[Field],
+    key: &[Field; 2],
+    nonce: &Field,
+    len: usize,
+) -> ProofResult<[Field; N]> {
+    let decrypted_len = padded_decrypt_len(len);
+    if decrypted_len != N {
+        return Err(ProofError::InvalidLength {
+            name: "native plaintext fixed length",
+            expected: decrypted_len,
+            actual: N,
+        });
+    }
+    if ciphertext.len() != decrypted_len + 1 {
+        return Err(ProofError::InvalidLength {
+            name: "native ciphertext",
+            expected: decrypted_len + 1,
+            actual: ciphertext.len(),
+        });
+    }
+    validate_native_nonce(nonce)?;
+
+    let stream_prefix = native_decrypt_stream_prefix(key, nonce, len);
+    Ok(std::array::from_fn(|i| {
+        native_stream_xor(
+            &ciphertext[i],
+            &native_decrypt_stream_word(&stream_prefix, i),
+        )
+    }))
 }
 
 pub fn native_encrypt_for_testing(

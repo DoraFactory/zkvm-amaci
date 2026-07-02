@@ -39,6 +39,11 @@ Current low-risk optimization completed:
 
 - removed the `state_roots` vector allocation in the reverse batch loop and
   replaced it with a rolling `next_state_root`.
+- changed process-message command decrypt in the hot path to a fixed
+  `[Field; 9]` output instead of allocating a `Vec<Field>`.
+- short-circuits invalid/no-op messages after required witness checks, avoiding
+  the new vote-root and new state-leaf Merkle recomputation when the state does
+  not change.
 
 Next candidates:
 
@@ -83,3 +88,10 @@ The aggregation proof must check internal chaining:
 - processMessages batch hashes and state commitments are contiguous;
 - tally commitments and batch numbers are contiguous;
 - final aggregate outputs match the round-level public commitments.
+
+## Current Branch Notes
+
+The `improve-proof` branch also skips empty slots in `processDeactivate`. Empty
+slots do not change active or deactivate roots, so the zkVM-friendly execution
+can avoid proving dummy state, active, and deactivate Merkle paths for those
+slots.

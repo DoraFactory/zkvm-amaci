@@ -145,26 +145,14 @@ fn validate_batch_witness_lengths(input: &ProcessDeactivateInput) -> ProofResult
 fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(Field, Field)> {
     let mut active_root = input.current_active_state_root.clone();
     let mut deactivate_root = input.current_deactivate_root.clone();
-    let deactivate_tree_depth = input.state_tree_depth + 2;
 
     for i in 0..input.batch_size {
         let is_empty = input.msgs[i][0].is_zero();
-        let command = if is_empty {
-            DeactivateCommand::empty(
-                &(Field::from(5usize.pow(input.state_tree_depth as u32)) - Field::one()),
-            )
-        } else {
-            decrypt_deactivate_command(input, i)?
-        };
-        let roots = process_one(
-            input,
-            i,
-            deactivate_tree_depth,
-            &active_root,
-            &deactivate_root,
-            &command,
-            is_empty,
-        )?;
+        if is_empty {
+            continue;
+        }
+        let command = decrypt_deactivate_command(input, i)?;
+        let roots = process_one(input, i, &active_root, &deactivate_root, &command)?;
         active_root = roots.0;
         deactivate_root = roots.1;
     }
@@ -179,18 +167,6 @@ struct DeactivateCommand {
     sig_r8: [Field; 2],
     sig_s: Field,
     packed_command: [Field; 3],
-}
-
-impl DeactivateCommand {
-    fn empty(state_index: &Field) -> Self {
-        Self {
-            state_index: state_index.clone(),
-            poll_id: Field::from(0u32),
-            sig_r8: [Field::from(0u32), Field::from(0u32)],
-            sig_s: Field::from(0u32),
-            packed_command: [Field::from(0u32), Field::from(0u32), Field::from(0u32)],
-        }
-    }
 }
 
 fn decrypt_deactivate_command(
@@ -214,15 +190,13 @@ fn decrypt_deactivate_command(
 fn process_one(
     input: &ProcessDeactivateInput,
     i: usize,
-    deactivate_tree_depth: usize,
     current_active_state_root: &Field,
     current_deactivate_root: &Field,
     command: &DeactivateCommand,
-    is_empty: bool,
 ) -> ProofResult<(Field, Field)> {
     let state_leaf = &input.current_state_leaves[i];
     let poll_ok = command.poll_id == input.expected_poll_id;
-    let sig_ok = if !is_empty && poll_ok {
+    let sig_ok = if poll_ok {
         verify_command_signature(
             &[state_leaf[0].clone(), state_leaf[1].clone()],
             &command.sig_r8,
@@ -316,17 +290,12 @@ fn process_one(
         input.c2[i][1].clone(),
         shared_key_hash,
     ]);
-    let new_deactivate_leaf = if is_empty {
-        Field::from(0u32)
-    } else {
-        deactivate_leaf_hash
-    };
+    let new_deactivate_leaf = deactivate_leaf_hash;
     let new_deactivate_root = root_from_path(
         &new_deactivate_leaf,
         &deactivate_index,
         &input.deactivate_leaves_path_elements[i],
     )?;
 
-    let _ = deactivate_tree_depth;
     Ok((new_active_root, new_deactivate_root))
 }
