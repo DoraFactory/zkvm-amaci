@@ -1,7 +1,10 @@
+use crate::auth::{
+    auth_keypair_from_seed_for_testing, auth_public_key_hash, sign_command_for_testing,
+};
 use crate::circuits::process_messages::{message_chain, EmptyRule};
 use crate::crypto::{
     decrypt_deactivation_flag, ecdh_formatted_priv_key, native_encrypt_for_testing,
-    native_rerandomize_ciphertext, native_sign_command_for_testing, private_to_pub_key,
+    native_rerandomize_ciphertext, private_to_pub_key,
 };
 use crate::error::ProofResult;
 use crate::field::Field;
@@ -53,6 +56,7 @@ pub struct RoundVote {
 struct User {
     priv_key: Field,
     pub_key: PubKey,
+    auth_pub_key: Vec<u8>,
     balance: Field,
     nonce: Field,
     votes: VoteRow,
@@ -61,8 +65,10 @@ struct User {
 impl User {
     fn new(priv_key: u32, balance: u32) -> Self {
         let priv_key = Field::from(priv_key);
+        let (auth_pub_key, _) = auth_keypair_from_seed_for_testing(&priv_key);
         Self {
             pub_key: private_to_pub_key(&priv_key),
+            auth_pub_key,
             priv_key,
             balance: Field::from(balance),
             nonce: Field::from(0u32),
@@ -81,7 +87,7 @@ impl User {
             Field::from(0u32),
             Field::from(0u32),
             Field::from(0u32),
-            Field::from(0u32),
+            auth_public_key_hash(&self.auth_pub_key),
         ])
     }
 }
@@ -346,6 +352,8 @@ fn build_process_deactivate(
     let zero = Field::from(0u32);
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
+    let mut auth_pub_keys = vec![Vec::new(); batch_size];
+    let mut auth_signatures = vec![Vec::new(); batch_size];
     let mut c1 = vec![[zero, zero]; batch_size];
     let mut c2 = vec![[zero, zero]; batch_size];
     let mut current_state_leaves = vec![[zero; 10]; batch_size];
@@ -360,7 +368,9 @@ fn build_process_deactivate(
         let enc_priv_key = Field::from(8001u32 + slot as u32);
         let enc_pub_key = private_to_pub_key(&enc_priv_key);
         let command = command_fields(poll_id, state_index, 0, 0, 1, &user.pub_key);
-        msgs[slot] = encrypt_signed_command(coord_priv_key, &enc_pub_key, &user.priv_key, command)?;
+        auth_pub_keys[slot] = user.auth_pub_key.clone();
+        auth_signatures[slot] = sign_command_for_testing(&user.priv_key, &command);
+        msgs[slot] = encrypt_command(coord_priv_key, &enc_pub_key, command)?;
         enc_pub_keys[slot] = enc_pub_key;
         current_state_leaves[slot] = user.state_leaf()?;
         current_state_paths[slot] = state_tree.path(state_index)?;
@@ -425,6 +435,8 @@ fn build_process_deactivate(
         coord_pub_key: coord_pub_key.clone(),
         msgs,
         enc_pub_keys,
+        auth_pub_keys,
+        auth_signatures,
         c1,
         c2,
         current_active_state,
@@ -520,6 +532,8 @@ fn build_process_messages_batch(
     let dummy_index = 5usize.pow(state_tree_depth as u32) - 1;
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
+    let mut auth_pub_keys = vec![Vec::new(); batch_size];
+    let mut auth_signatures = vec![Vec::new(); batch_size];
     let mut current_state_leaves = vec![[zero; 10]; batch_size];
     let mut current_state_paths = vec![Vec::new(); batch_size];
     let mut active_state_leaves = vec![zero; batch_size];
@@ -547,12 +561,9 @@ fn build_process_messages_batch(
             nonce,
             &command.new_pub_key,
         );
-        msgs[slot] = encrypt_signed_command(
-            coord_priv_key,
-            &enc_pub_key,
-            &command.user_priv_key,
-            command_fields,
-        )?;
+        auth_pub_keys[slot] = user.auth_pub_key.clone();
+        auth_signatures[slot] = sign_command_for_testing(&command.user_priv_key, &command_fields);
+        msgs[slot] = encrypt_command(coord_priv_key, &enc_pub_key, command_fields)?;
         enc_pub_keys[slot] = enc_pub_key;
         current_state_leaves[slot] = user.state_leaf()?;
         current_state_paths[slot] = state_tree.path(command.state_index)?;
@@ -614,6 +625,8 @@ fn build_process_messages_batch(
         coord_pub_key: coord_pub_key.clone(),
         msgs,
         enc_pub_keys,
+        auth_pub_keys,
+        auth_signatures,
         current_state_root,
         current_state_leaves,
         current_state_leaves_path_elements: current_state_paths,
@@ -763,23 +776,21 @@ fn command_fields(
     ]
 }
 
-fn encrypt_signed_command(
+fn encrypt_command(
     coord_priv_key: &Field,
     enc_pub_key: &PubKey,
-    user_priv_key: &Field,
     command: [Field; 3],
 ) -> ProofResult<Message> {
     let zero = Field::from(0u32);
-    let (sig_r8, sig_s) = native_sign_command_for_testing(user_priv_key, &command);
     let shared_key = ecdh_formatted_priv_key(coord_priv_key, enc_pub_key);
     let mut plaintext = vec![
         command[0].clone(),
         command[1].clone(),
         command[2].clone(),
         zero.clone(),
-        sig_r8[0].clone(),
-        sig_r8[1].clone(),
-        sig_s,
+        zero.clone(),
+        zero.clone(),
+        zero.clone(),
     ];
     plaintext.resize(9, zero.clone());
     let ciphertext = native_encrypt_for_testing(&plaintext, &shared_key, &zero, 7)?;

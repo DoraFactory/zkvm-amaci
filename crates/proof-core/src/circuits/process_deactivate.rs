@@ -1,9 +1,7 @@
+use crate::auth::verify_command_auth_signature;
 use crate::circuits::process_messages::{message_chain, EmptyRule};
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash2};
-use crate::crypto::{
-    decrypt_deactivation_flag, ecdh_formatted_priv_key, private_to_pub_key,
-    verify_command_signature,
-};
+use crate::crypto::{decrypt_deactivation_flag, ecdh_formatted_priv_key, private_to_pub_key};
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
 use crate::hash_backend::hash_fields;
@@ -130,6 +128,8 @@ fn validate_batch_witness_lengths(input: &ProcessDeactivateInput) -> ProofResult
             "deactivateLeavesPathElements",
             input.deactivate_leaves_path_elements.len(),
         ),
+        ("authPubKeys", input.auth_pub_keys.len()),
+        ("authSignatures", input.auth_signatures.len()),
     ] {
         if actual != input.batch_size {
             return Err(ProofError::InvalidLength {
@@ -164,8 +164,6 @@ fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(Field, Field)> 
 struct DeactivateCommand {
     state_index: Field,
     poll_id: Field,
-    sig_r8: [Field; 2],
-    sig_s: Field,
     packed_command: [Field; 3],
 }
 
@@ -181,8 +179,6 @@ fn decrypt_deactivate_command(
     Ok(DeactivateCommand {
         state_index: cmd.state_index,
         poll_id: cmd.poll_id,
-        sig_r8: cmd.sig_r8,
-        sig_s: cmd.sig_s,
         packed_command: cmd.packed_command,
     })
 }
@@ -197,10 +193,10 @@ fn process_one(
     let state_leaf = &input.current_state_leaves[i];
     let poll_ok = command.poll_id == input.expected_poll_id;
     let sig_ok = if poll_ok {
-        verify_command_signature(
-            &[state_leaf[0].clone(), state_leaf[1].clone()],
-            &command.sig_r8,
-            &command.sig_s,
+        verify_command_auth_signature(
+            &state_leaf[9],
+            &input.auth_pub_keys[i],
+            &input.auth_signatures[i],
             &command.packed_command,
         )?
     } else {

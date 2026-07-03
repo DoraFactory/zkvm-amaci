@@ -4,6 +4,7 @@
 //! should only deserialize [`ProverInput`], call [`execute_proof_logic`], and
 //! commit the returned [`PublicOutput`].
 
+pub mod auth;
 pub mod circuits;
 pub mod codec;
 pub mod crypto;

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ed25519-dalek = "2.2"
+ml-dsa = { version = "0.1.1", default-features = false, features = ["alloc"] }
 num-traits = "0.2"
 ruint = { version = "1.18", default-features = false, features = ["alloc", "serde", "num-traits"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -2,7 +2,6 @@ use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
 use crate::hash_backend::hash_fields;
 use crate::native_types::{field_to_digest, NativeCommand};
-use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use num_traits::{One, Zero};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -14,34 +13,6 @@ pub fn private_to_pub_key(formatted_priv_key: &Field) -> [Field; 2] {
 pub fn ecdh_formatted_priv_key(formatted_priv_key: &Field, pub_key: &[Field; 2]) -> [Field; 2] {
     ecdh_formatted_priv_key_native(formatted_priv_key, pub_key)
         .unwrap_or_else(|_| [Field::from(0u32), Field::one()])
-}
-
-pub fn verify_command_signature(
-    pub_key: &[Field; 2],
-    r8: &[Field; 2],
-    s: &Field,
-    packed_command: &[Field; 3],
-) -> ProofResult<bool> {
-    let verifying_key = VerifyingKey::from_bytes(&field_to_fixed_be(
-        pub_key_ed25519(pub_key),
-        "Ed25519 public key",
-    )?)
-    .map_err(|e| ProofError::Crypto(format!("invalid Ed25519 public key: {e}")))?;
-    let signature = Ed25519Signature::from_bytes(&join_ed25519_signature(r8, s)?);
-    Ok(verifying_key
-        .verify(&native_command_message(packed_command)?, &signature)
-        .is_ok())
-}
-
-pub fn native_sign_command_for_testing(
-    formatted_priv_key: &Field,
-    packed_command: &[Field; 3],
-) -> ([Field; 2], Field) {
-    let key_material = native_key_material(formatted_priv_key);
-    let signature = key_material.signing_key.sign(
-        &native_command_message(packed_command).expect("test command fields fit native widths"),
-    );
-    split_ed25519_signature(signature.to_bytes())
 }
 
 pub fn native_rerandomize_ciphertext(
@@ -74,20 +45,17 @@ pub fn native_rerandomize_ciphertext(
 }
 
 struct NativeKeyMaterial {
-    signing_key: SigningKey,
     x25519_secret: X25519StaticSecret,
     pub_key: [Field; 2],
 }
 
 fn native_key_material(formatted_priv_key: &Field) -> NativeKeyMaterial {
-    let signing_key = SigningKey::from_bytes(&native_private_key_seed(formatted_priv_key));
     let x25519_secret = X25519StaticSecret::from(native_x25519_secret_seed(formatted_priv_key));
-    let ed_pub = Field::from_be_bytes(signing_key.verifying_key().to_bytes());
+    let native_key_id = Field::from_be_bytes(native_key_id(formatted_priv_key));
     let x_pub = Field::from_be_bytes(X25519PublicKey::from(&x25519_secret).to_bytes());
     NativeKeyMaterial {
-        signing_key,
         x25519_secret,
-        pub_key: [ed_pub, x_pub],
+        pub_key: [native_key_id, x_pub],
     }
 }
 
@@ -114,8 +82,8 @@ fn ecdh_formatted_priv_key_native(
     ])
 }
 
-fn native_private_key_seed(formatted_priv_key: &Field) -> [u8; 32] {
-    native_seed(b"AMACI_ZKVM_NATIVE_ED25519_SEED_V1", formatted_priv_key)
+fn native_key_id(formatted_priv_key: &Field) -> [u8; 32] {
+    native_seed(b"AMACI_ZKVM_NATIVE_KEY_ID_V1", formatted_priv_key)
 }
 
 fn native_x25519_secret_seed(formatted_priv_key: &Field) -> [u8; 32] {
@@ -129,30 +97,8 @@ fn native_seed(domain: &[u8], formatted_priv_key: &Field) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn native_command_message(packed_command: &[Field; 3]) -> ProofResult<[u8; 32]> {
+pub fn native_command_message(packed_command: &[Field; 3]) -> ProofResult<[u8; 32]> {
     Ok(NativeCommand::from_packed_fields(packed_command)?.message_digest())
-}
-
-fn split_ed25519_signature(bytes: [u8; 64]) -> ([Field; 2], Field) {
-    (
-        [
-            Field::from_be_slice(&bytes[0..22]),
-            Field::from_be_slice(&bytes[22..43]),
-        ],
-        Field::from_be_slice(&bytes[43..64]),
-    )
-}
-
-fn join_ed25519_signature(r8: &[Field; 2], s: &Field) -> ProofResult<[u8; 64]> {
-    let mut bytes = [0u8; 64];
-    write_fixed_be(&mut bytes[0..22], &r8[0], "Ed25519 signature chunk 0")?;
-    write_fixed_be(&mut bytes[22..43], &r8[1], "Ed25519 signature chunk 1")?;
-    write_fixed_be(&mut bytes[43..64], s, "Ed25519 signature chunk 2")?;
-    Ok(bytes)
-}
-
-fn pub_key_ed25519(pub_key: &[Field; 2]) -> &Field {
-    &pub_key[0]
 }
 
 fn pub_key_x25519(pub_key: &[Field; 2]) -> &Field {

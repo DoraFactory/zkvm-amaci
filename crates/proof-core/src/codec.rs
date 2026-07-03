@@ -221,6 +221,8 @@ fn encode_process_messages(out: &mut Vec<u8>, input: &ProcessMessagesInput) {
     write_pub_key(out, &input.coord_pub_key);
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
+    write_byte_vecs(out, &input.auth_pub_keys);
+    write_byte_vecs(out, &input.auth_signatures);
     write_field(out, &input.current_state_root);
     write_state_leaves(out, &input.current_state_leaves);
     write_path_sets(out, &input.current_state_leaves_path_elements);
@@ -251,6 +253,8 @@ fn decode_process_messages(input: &mut Decoder<'_>) -> ProofResult<ProcessMessag
         coord_pub_key: input.read_pub_key("coordPubKey")?,
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
+        auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
+        auth_signatures: input.read_byte_vecs("authSignatures")?,
         current_state_root: input.read_field("currentStateRoot")?,
         current_state_leaves: input.read_state_leaves("currentStateLeaves")?,
         current_state_leaves_path_elements: input
@@ -323,6 +327,8 @@ fn encode_process_deactivate(out: &mut Vec<u8>, input: &ProcessDeactivateInput) 
     write_pub_key(out, &input.coord_pub_key);
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
+    write_byte_vecs(out, &input.auth_pub_keys);
+    write_byte_vecs(out, &input.auth_signatures);
     write_pub_keys(out, &input.c1);
     write_pub_keys(out, &input.c2);
     write_fields(out, &input.current_active_state);
@@ -352,6 +358,8 @@ fn decode_process_deactivate(input: &mut Decoder<'_>) -> ProofResult<ProcessDeac
         coord_pub_key: input.read_pub_key("coordPubKey")?,
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
+        auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
+        auth_signatures: input.read_byte_vecs("authSignatures")?,
         c1: input.read_pub_keys("c1")?,
         c2: input.read_pub_keys("c2")?,
         current_active_state: input.read_fields("currentActiveState")?,
@@ -437,6 +445,18 @@ fn write_pub_keys(out: &mut Vec<u8>, values: &[PubKey]) {
     write_usize(out, values.len());
     for value in values {
         write_pub_key(out, value);
+    }
+}
+
+fn write_byte_vec(out: &mut Vec<u8>, value: &[u8]) {
+    write_usize(out, value.len());
+    out.extend_from_slice(value);
+}
+
+fn write_byte_vecs(out: &mut Vec<u8>, values: &[Vec<u8>]) {
+    write_usize(out, values.len());
+    for value in values {
+        write_byte_vec(out, value);
     }
 }
 
@@ -570,6 +590,20 @@ impl<'a> Decoder<'a> {
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_pub_key(name)?);
+        }
+        Ok(out)
+    }
+
+    fn read_byte_vec(&mut self, name: &'static str) -> ProofResult<Vec<u8>> {
+        let len = self.read_usize(name)?;
+        Ok(self.take(name, len)?.to_vec())
+    }
+
+    fn read_byte_vecs(&mut self, name: &'static str) -> ProofResult<Vec<Vec<u8>>> {
+        let len = self.read_usize(name)?;
+        let mut out = Vec::with_capacity(len);
+        for _ in 0..len {
+            out.push(self.read_byte_vec(name)?);
         }
         Ok(out)
     }

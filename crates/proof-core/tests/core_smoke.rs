@@ -1,11 +1,14 @@
+use amaci_proof_core::auth::{
+    auth_keypair_from_seed_for_testing, auth_public_key_hash, sign_command_for_testing,
+    verify_command_auth_signature,
+};
 use amaci_proof_core::circuits::process_messages::{message_chain, EmptyRule};
 use amaci_proof_core::codec::{
     decode_input, decode_public_output, encode_input, encode_public_output,
 };
 use amaci_proof_core::crypto::{
     decrypt_without_check, ecdh_formatted_priv_key, native_encrypt_for_testing,
-    native_rerandomize_ciphertext, native_sign_command_for_testing, private_to_pub_key,
-    verify_command_signature,
+    native_rerandomize_ciphertext, private_to_pub_key,
 };
 use amaci_proof_core::error::ProofError;
 use amaci_proof_core::field::{add, ensure_bits, field, mul, sub, two_pow};
@@ -131,8 +134,15 @@ fn native_crypto_roundtrips() {
     let priv_key = Field::from(123456u32);
     let pub_key = private_to_pub_key(&priv_key);
     let packed_command = [Field::from(11u32), Field::from(22u32), Field::from(33u32)];
-    let (r8, s) = native_sign_command_for_testing(&priv_key, &packed_command);
-    assert!(verify_command_signature(&pub_key, &r8, &s, &packed_command).unwrap());
+    let (auth_pub_key, _) = auth_keypair_from_seed_for_testing(&priv_key);
+    let auth_sig = sign_command_for_testing(&priv_key, &packed_command);
+    assert!(verify_command_auth_signature(
+        &auth_public_key_hash(&auth_pub_key),
+        &auth_pub_key,
+        &auth_sig,
+        &packed_command
+    )
+    .unwrap());
 
     let alice_priv = Field::from(111u32);
     let bob_priv = Field::from(222u32);

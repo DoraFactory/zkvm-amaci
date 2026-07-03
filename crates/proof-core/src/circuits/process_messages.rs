@@ -1,7 +1,8 @@
+use crate::auth::verify_command_auth_signature;
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, hash2};
 use crate::crypto::{
     decrypt_deactivation_flag, decrypt_without_check_array, ecdh_formatted_priv_key,
-    private_to_pub_key, verify_command_signature,
+    private_to_pub_key,
 };
 use crate::error::{ProofError, ProofResult};
 use crate::field::{ensure_bool, pow5, Field};
@@ -158,6 +159,8 @@ fn validate_batch_witness_lengths(input: &ProcessMessagesInput) -> ProofResult<(
             "currentVoteWeightsPathElements",
             input.current_vote_weights_path_elements.len(),
         ),
+        ("authPubKeys", input.auth_pub_keys.len()),
+        ("authSignatures", input.auth_signatures.len()),
     ] {
         if actual != input.batch_size {
             return Err(ProofError::InvalidLength {
@@ -178,8 +181,6 @@ pub struct Command {
     pub nonce: Field,
     pub poll_id: Field,
     pub new_pub_key: [Field; 2],
-    pub sig_r8: [Field; 2],
-    pub sig_s: Field,
     pub packed_command: [Field; 3],
 }
 
@@ -199,8 +200,6 @@ pub fn message_to_command(
         vote_option_index: unpacked[4].clone(),
         new_vote_weight,
         new_pub_key: [decrypted[1].clone(), decrypted[2].clone()],
-        sig_r8: [decrypted[4].clone(), decrypted[5].clone()],
-        sig_s: decrypted[6].clone(),
         packed_command: [
             decrypted[0].clone(),
             decrypted[1].clone(),
@@ -280,6 +279,7 @@ fn process_one(
         packed,
         state_leaf,
         &input.current_vote_weights[i],
+        i,
         command,
     )?;
 
@@ -327,7 +327,7 @@ fn process_one(
     new_state_leaf[6] = state_leaf[6].clone();
     new_state_leaf[7] = state_leaf[7].clone();
     new_state_leaf[8] = state_leaf[8].clone();
-    new_state_leaf[9] = Field::from(0u32);
+    new_state_leaf[9] = state_leaf[9].clone();
 
     let new_leaf_hash = state_leaf_hash(&new_state_leaf)?;
     root_from_path(
@@ -349,10 +349,13 @@ fn state_leaf_transformer(
     packed: &crate::packing::ProcessMessagesPackedVals,
     state_leaf: &StateLeaf,
     current_votes_for_option: &Field,
+    i: usize,
     command: &Command,
 ) -> ProofResult<TransformResult> {
     let msg_valid = message_validator(
         packed,
+        input,
+        i,
         state_leaf,
         current_votes_for_option,
         command,
@@ -383,6 +386,8 @@ fn state_leaf_transformer(
 
 fn message_validator(
     packed: &crate::packing::ProcessMessagesPackedVals,
+    input: &ProcessMessagesInput,
+    i: usize,
     state_leaf: &StateLeaf,
     current_votes_for_option: &Field,
     command: &Command,
@@ -393,10 +398,10 @@ fn message_validator(
     let nonce_ok = state_leaf[4].clone() + Field::one() == command.nonce;
     let poll_ok = command.poll_id == *expected_poll_id;
     let sig_ok = if state_index_ok && vote_option_ok && nonce_ok && poll_ok {
-        verify_command_signature(
-            &[state_leaf[0].clone(), state_leaf[1].clone()],
-            &command.sig_r8,
-            &command.sig_s,
+        verify_command_auth_signature(
+            &state_leaf[9],
+            &input.auth_pub_keys[i],
+            &input.auth_signatures[i],
             &command.packed_command,
         )?
     } else {

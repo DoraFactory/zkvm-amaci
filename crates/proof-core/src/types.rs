@@ -2,6 +2,8 @@ use crate::field::Field;
 use serde::{Deserialize, Serialize};
 
 pub type PubKey = [Field; 2];
+pub type AuthPublicKey = Vec<u8>;
+pub type AuthSignature = Vec<u8>;
 pub const MESSAGE_WORDS: usize = 10;
 pub const STATE_LEAF_WORDS: usize = 10;
 
@@ -35,6 +37,8 @@ pub struct ProcessMessagesInput {
     pub coord_pub_key: PubKey,
     pub msgs: Vec<Message>,
     pub enc_pub_keys: Vec<PubKey>,
+    pub auth_pub_keys: Vec<AuthPublicKey>,
+    pub auth_signatures: Vec<AuthSignature>,
     pub current_state_root: Field,
     pub current_state_leaves: Vec<StateLeaf>,
     pub current_state_leaves_path_elements: Vec<PathElements>,
@@ -85,6 +89,8 @@ pub struct ProcessDeactivateInput {
     pub coord_pub_key: PubKey,
     pub msgs: Vec<Message>,
     pub enc_pub_keys: Vec<PubKey>,
+    pub auth_pub_keys: Vec<AuthPublicKey>,
+    pub auth_signatures: Vec<AuthSignature>,
     pub c1: Vec<PubKey>,
     pub c2: Vec<PubKey>,
     pub current_active_state: Vec<Field>,
