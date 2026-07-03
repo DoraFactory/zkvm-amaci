@@ -218,15 +218,14 @@ fn process_batch(
 
     for i in (0..input.batch_size).rev() {
         let is_empty = input.enc_pub_keys[i][0].is_zero();
-        let command = if is_empty {
-            empty_command()
-        } else {
-            message_to_command(
-                &input.msgs[i],
-                &input.coord_priv_key,
-                &input.enc_pub_keys[i],
-            )?
-        };
+        if is_empty {
+            continue;
+        }
+        let command = message_to_command(
+            &input.msgs[i],
+            &input.coord_priv_key,
+            &input.enc_pub_keys[i],
+        )?;
         next_state_root = process_one(
             input,
             packed,
@@ -240,20 +239,6 @@ fn process_batch(
     Ok(next_state_root)
 }
 
-fn empty_command() -> Command {
-    Command {
-        state_index: Field::from(0u32),
-        vote_option_index: Field::from(0u32),
-        new_vote_weight: Field::from(0u32),
-        nonce: Field::from(0u32),
-        poll_id: Field::from(0u32),
-        new_pub_key: [Field::from(0u32), Field::from(0u32)],
-        sig_r8: [Field::from(0u32), Field::from(0u32)],
-        sig_s: Field::from(0u32),
-        packed_command: [Field::from(0u32), Field::from(0u32), Field::from(0u32)],
-    }
-}
-
 fn process_one(
     input: &ProcessMessagesInput,
     packed: &crate::packing::ProcessMessagesPackedVals,
@@ -263,18 +248,9 @@ fn process_one(
     command: &Command,
 ) -> ProofResult<Field> {
     let state_leaf = &input.current_state_leaves[i];
-    let transform = state_leaf_transformer(
-        input,
-        packed,
-        state_leaf,
-        &input.current_vote_weights[i],
-        &input.active_state_leaves[i],
-        command,
-    )?;
-
     let max_index = Field::from(pow5(5, input.state_tree_depth));
-    let state_index = if transform.message_valid {
-        command.state_index.clone()
+    let state_index = if command.state_index <= packed.num_sign_ups {
+        command.state_index
     } else {
         &max_index - Field::one()
     };
@@ -292,6 +268,19 @@ fn process_one(
         &state_index,
         &input.active_state_leaves_path_elements[i],
         &input.active_state_root,
+    )?;
+
+    let active = input.active_state_leaves[i].is_zero();
+    if !active {
+        return Ok(*current_state_root);
+    }
+
+    let transform = state_leaf_transformer(
+        input,
+        packed,
+        state_leaf,
+        &input.current_vote_weights[i],
+        command,
     )?;
 
     let vote_index = if transform.message_valid {
@@ -360,7 +349,6 @@ fn state_leaf_transformer(
     packed: &crate::packing::ProcessMessagesPackedVals,
     state_leaf: &StateLeaf,
     current_votes_for_option: &Field,
-    deactivate: &Field,
     command: &Command,
 ) -> ProofResult<TransformResult> {
     let msg_valid = message_validator(
@@ -370,8 +358,7 @@ fn state_leaf_transformer(
         command,
         &input.expected_poll_id,
     )?;
-    let active = deactivate.is_zero();
-    let is_deactivated_odd = if active && msg_valid.0 {
+    let is_deactivated_odd = if msg_valid.0 {
         decrypt_deactivation_flag(
             &[state_leaf[5].clone(), state_leaf[6].clone()],
             &[state_leaf[7].clone(), state_leaf[8].clone()],
@@ -381,7 +368,7 @@ fn state_leaf_transformer(
     } else {
         true
     };
-    let is_valid = !is_deactivated_odd && active && msg_valid.0;
+    let is_valid = !is_deactivated_odd && msg_valid.0;
     Ok(TransformResult {
         message_valid: msg_valid.0,
         is_valid,
