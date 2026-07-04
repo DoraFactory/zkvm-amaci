@@ -7,8 +7,8 @@ use amaci_proof_core::codec::{
     decode_input, decode_public_output, encode_input, encode_public_output,
 };
 use amaci_proof_core::crypto::{
-    decrypt_without_check, ecdh_formatted_priv_key, native_encrypt_for_testing,
-    native_rerandomize_ciphertext, private_to_pub_key,
+    decrypt_without_check, native_encrypt_for_testing, native_rerandomize_ciphertext,
+    private_to_pub_key,
 };
 use amaci_proof_core::error::ProofError;
 use amaci_proof_core::field::{add, ensure_bits, field, mul, sub, two_pow};
@@ -144,14 +144,18 @@ fn native_crypto_roundtrips() {
     )
     .unwrap());
 
-    let alice_priv = Field::from(111u32);
-    let bob_priv = Field::from(222u32);
-    let alice_pub = private_to_pub_key(&alice_priv);
-    let bob_pub = private_to_pub_key(&bob_priv);
+    let kem_seed = Field::from(111u32);
+    let kem_randomness = Field::from(222u32);
+    let (kem_ciphertext, kem_compact, shared_send) =
+        amaci_proof_core::pq_kem::encapsulate_to_seed_for_testing(&kem_seed, &kem_randomness)
+            .unwrap();
     assert_eq!(
-        ecdh_formatted_priv_key(&alice_priv, &bob_pub),
-        ecdh_formatted_priv_key(&bob_priv, &alice_pub)
+        kem_compact,
+        amaci_proof_core::pq_kem::kem_ciphertext_compact(&kem_ciphertext)
     );
+    let shared_recv =
+        amaci_proof_core::pq_kem::decapsulate_to_fields(&kem_seed, &kem_ciphertext).unwrap();
+    assert_eq!(shared_send, shared_recv);
 
     let key = [Field::from(11u32), Field::from(22u32)];
     let nonce = Field::from(7u32);

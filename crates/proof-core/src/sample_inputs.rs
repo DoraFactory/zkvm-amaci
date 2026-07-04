@@ -3,8 +3,7 @@ use crate::auth::{
 };
 use crate::circuits::process_messages::{message_chain, EmptyRule};
 use crate::crypto::{
-    ecdh_formatted_priv_key, native_encrypt_for_testing, native_rerandomize_ciphertext,
-    private_to_pub_key,
+    native_encrypt_for_testing, native_rerandomize_ciphertext, private_to_pub_key,
 };
 use crate::error::ProofResult;
 use crate::field::Field;
@@ -74,6 +73,7 @@ fn build_process_messages_input(
 
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero.clone(), zero.clone()]; batch_size];
+    let mut kem_ciphertexts = vec![Vec::new(); batch_size];
     let mut auth_pub_keys = vec![Vec::new(); batch_size];
     let mut auth_signatures = vec![Vec::new(); batch_size];
     let zero_state_leaf = [zero; 10];
@@ -96,9 +96,6 @@ fn build_process_messages_input(
         let (auth_pub_key, _) = auth_keypair_from_seed_for_testing(&user_priv_key);
         let new_priv_key = Field::from(3003u32 + i as u32);
         let new_pub_key = private_to_pub_key(&new_priv_key);
-        let enc_priv_key = Field::from(4004u32 + i as u32);
-        let enc_pub_key = private_to_pub_key(&enc_priv_key);
-
         let packed_command = pack_command_data(
             &poll_id,
             &zero,
@@ -113,7 +110,11 @@ fn build_process_messages_input(
             new_pub_key[0].clone(),
             new_pub_key[1].clone(),
         ];
-        let message = encrypt_command(&coord_priv_key, &enc_pub_key, command.clone())?;
+        let encrypted = encrypt_command(
+            &coord_priv_key,
+            &Field::from(4004u32 + i as u32),
+            command.clone(),
+        )?;
 
         let state_leaf = [
             user_pub_key[0].clone(),
@@ -141,8 +142,9 @@ fn build_process_messages_input(
             auth_public_key_hash(&auth_pub_key),
         ];
 
-        msgs[i] = message;
-        enc_pub_keys[i] = enc_pub_key;
+        msgs[i] = encrypted.0;
+        enc_pub_keys[i] = encrypted.1;
+        kem_ciphertexts[i] = encrypted.2;
         auth_pub_keys[i] = auth_pub_key;
         auth_signatures[i] = sign_command_for_testing(&user_priv_key, &command);
         current_state_leaves[i] = state_leaf.clone();
@@ -205,6 +207,7 @@ fn build_process_messages_input(
         coord_pub_key,
         msgs,
         enc_pub_keys,
+        kem_ciphertexts,
         auth_pub_keys,
         auth_signatures,
         current_state_root,
@@ -293,8 +296,13 @@ pub fn process_deactivate_native_2_5() -> ProofResult<ProcessDeactivateInput> {
     let mut state_indices = Vec::with_capacity(batch_size);
     let mut msgs = Vec::with_capacity(batch_size);
     let mut enc_pub_keys = Vec::with_capacity(batch_size);
+    let mut kem_ciphertexts = Vec::with_capacity(batch_size);
     let mut auth_pub_keys = Vec::with_capacity(batch_size);
     let mut auth_signatures = Vec::with_capacity(batch_size);
+    let mut deactivate_kem_pub_keys = Vec::with_capacity(batch_size);
+    let mut deactivate_kem_randomness = Vec::with_capacity(batch_size);
+    let mut deactivate_kem_ciphertexts = Vec::with_capacity(batch_size);
+    let mut deactivate_shared_keys = Vec::with_capacity(batch_size);
     let mut c1 = Vec::with_capacity(batch_size);
     let mut c2 = Vec::with_capacity(batch_size);
 
@@ -302,11 +310,10 @@ pub fn process_deactivate_native_2_5() -> ProofResult<ProcessDeactivateInput> {
         let state_index = Field::from((i + 1) as u32);
         let user_priv_key = Field::from(6001u32 + i as u32);
         let user_pub_key = private_to_pub_key(&user_priv_key);
+        let user_kem_pub_key = crate::pq_kem::kem_public_key_from_seed_for_testing(&user_priv_key);
         let (auth_pub_key, _) = auth_keypair_from_seed_for_testing(&user_priv_key);
         let new_priv_key = Field::from(7001u32 + i as u32);
         let new_pub_key = private_to_pub_key(&new_priv_key);
-        let enc_priv_key = Field::from(8001u32 + i as u32);
-        let enc_pub_key = private_to_pub_key(&enc_priv_key);
         let packed_command = pack_command_data(
             &poll_id,
             &zero,
@@ -321,7 +328,11 @@ pub fn process_deactivate_native_2_5() -> ProofResult<ProcessDeactivateInput> {
             new_pub_key[0].clone(),
             new_pub_key[1].clone(),
         ];
-        let message = encrypt_command(&coord_priv_key, &enc_pub_key, command.clone())?;
+        let encrypted = encrypt_command(
+            &coord_priv_key,
+            &Field::from(8001u32 + i as u32),
+            command.clone(),
+        )?;
         let state_leaf = [
             user_pub_key[0].clone(),
             user_pub_key[1].clone(),
@@ -337,12 +348,25 @@ pub fn process_deactivate_native_2_5() -> ProofResult<ProcessDeactivateInput> {
         state_hashes[state_index_as_usize(&state_index)?] = hash_state_leaf(&state_leaf)?;
         current_state_leaves.push(state_leaf);
         state_indices.push(state_index);
-        msgs.push(message);
-        enc_pub_keys.push(enc_pub_key);
+        msgs.push(encrypted.0);
+        enc_pub_keys.push(encrypted.1);
+        kem_ciphertexts.push(encrypted.2);
         auth_pub_keys.push(auth_pub_key);
         auth_signatures.push(sign_command_for_testing(&user_priv_key, &command));
-        c1.push([zero.clone(), zero.clone()]);
-        c2.push([zero.clone(), zero.clone()]);
+        let deactivate_randomness = Field::from(9001u32 + i as u32);
+        let (deactivate_ciphertext, _, deactivate_shared_key) =
+            crate::pq_kem::encapsulate_to_public_key_for_testing(
+                &user_kem_pub_key,
+                &deactivate_randomness,
+            )?;
+        let (c1_fields, c2_fields) =
+            crate::pq_kem::deactivate_ciphertext_fields(&deactivate_ciphertext);
+        deactivate_kem_pub_keys.push(user_kem_pub_key);
+        deactivate_kem_randomness.push(deactivate_randomness);
+        deactivate_kem_ciphertexts.push(deactivate_ciphertext);
+        deactivate_shared_keys.push(deactivate_shared_key);
+        c1.push(c1_fields);
+        c2.push(c2_fields);
     }
 
     let (current_state_root, _) = quin_root_and_path(&state_hashes, state_tree_depth, 0)?;
@@ -367,14 +391,7 @@ pub fn process_deactivate_native_2_5() -> ProofResult<ProcessDeactivateInput> {
         let (_, deactivate_path) =
             quin_root_and_path(&deactivate_hashes, deactivate_tree_depth, deactivate_index)?;
 
-        let shared_key = ecdh_formatted_priv_key(
-            &coord_priv_key,
-            &[
-                current_state_leaves[i][0].clone(),
-                current_state_leaves[i][1].clone(),
-            ],
-        );
-        let shared_key_hash = hash_fields(&shared_key);
+        let shared_key_hash = crate::pq_kem::shared_key_hash_fields(&deactivate_shared_keys[i]);
         let deactivate_leaf = hash_fields(&[
             c1[i][0].clone(),
             c1[i][1].clone(),
@@ -425,8 +442,12 @@ pub fn process_deactivate_native_2_5() -> ProofResult<ProcessDeactivateInput> {
         coord_pub_key,
         msgs,
         enc_pub_keys,
+        kem_ciphertexts,
         auth_pub_keys,
         auth_signatures,
+        deactivate_kem_pub_keys,
+        deactivate_kem_randomness,
+        deactivate_kem_ciphertexts,
         c1,
         c2,
         current_active_state,
@@ -452,10 +473,14 @@ pub fn add_new_key_native_2() -> ProofResult<AddNewKeyInput> {
     let coord_pub_key = private_to_pub_key(&coord_priv_key);
     let old_private_key = Field::from(6001u32);
     let new_pub_key = private_to_pub_key(&Field::from(9001u32));
-    let c1 = [zero.clone(), zero.clone()];
-    let c2 = [zero.clone(), zero.clone()];
-    let shared_key = ecdh_formatted_priv_key(&old_private_key, &coord_pub_key);
-    let shared_key_hash = hash_fields(&shared_key);
+    let old_kem_pub_key = crate::pq_kem::kem_public_key_from_seed_for_testing(&old_private_key);
+    let (deactivate_kem_ciphertext, _, shared_key) =
+        crate::pq_kem::encapsulate_to_public_key_for_testing(
+            &old_kem_pub_key,
+            &Field::from(9001u32),
+        )?;
+    let (c1, c2) = crate::pq_kem::deactivate_ciphertext_fields(&deactivate_kem_ciphertext);
+    let shared_key_hash = crate::pq_kem::shared_key_hash_fields(&shared_key);
     let deactivate_leaf = hash_fields(&[
         c1[0].clone(),
         c1[1].clone(),
@@ -497,6 +522,7 @@ pub fn add_new_key_native_2() -> ProofResult<AddNewKeyInput> {
         deactivate_leaf,
         c1,
         c2,
+        deactivate_kem_ciphertext,
         random_val,
         d1,
         d2,
@@ -510,11 +536,12 @@ pub fn add_new_key_native_2() -> ProofResult<AddNewKeyInput> {
 
 fn encrypt_command(
     coord_priv_key: &Field,
-    enc_pub_key: &[Field; 2],
+    randomness: &Field,
     command: [Field; 3],
-) -> ProofResult<Message> {
+) -> ProofResult<(Message, [Field; 2], Vec<u8>)> {
     let zero = Field::from(0u32);
-    let shared_key = ecdh_formatted_priv_key(coord_priv_key, enc_pub_key);
+    let (kem_ciphertext, compact, shared_key) =
+        crate::pq_kem::encapsulate_to_seed_for_testing(coord_priv_key, randomness)?;
     let mut plaintext = vec![
         command[0].clone(),
         command[1].clone(),
@@ -525,12 +552,13 @@ fn encrypt_command(
         zero.clone(),
     ];
     plaintext.resize(9, zero.clone());
-    message_from_ciphertext(native_encrypt_for_testing(
+    let message = message_from_ciphertext(native_encrypt_for_testing(
         &plaintext,
         &shared_key,
         &zero,
         7,
-    )?)
+    )?)?;
+    Ok((message, compact, kem_ciphertext))
 }
 
 fn message_from_ciphertext(ciphertext: Vec<Field>) -> ProofResult<Message> {

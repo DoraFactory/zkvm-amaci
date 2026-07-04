@@ -15,6 +15,7 @@ pub mod hash_backend;
 pub mod merkle;
 pub mod native_types;
 pub mod packing;
+pub mod pq_kem;
 pub mod public_output;
 pub mod round_fixture;
 pub mod sample_inputs;

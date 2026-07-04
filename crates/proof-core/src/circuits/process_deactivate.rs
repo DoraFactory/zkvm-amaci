@@ -1,7 +1,7 @@
 use crate::auth::verify_command_auth_signature;
 use crate::circuits::process_messages::{message_chain, EmptyRule};
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash2};
-use crate::crypto::{decrypt_deactivation_flag, ecdh_formatted_priv_key, private_to_pub_key};
+use crate::crypto::{decrypt_deactivation_flag, private_to_pub_key};
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
 use crate::hash_backend::hash_fields;
@@ -128,8 +128,18 @@ fn validate_batch_witness_lengths(input: &ProcessDeactivateInput) -> ProofResult
             "deactivateLeavesPathElements",
             input.deactivate_leaves_path_elements.len(),
         ),
+        ("kemCiphertexts", input.kem_ciphertexts.len()),
         ("authPubKeys", input.auth_pub_keys.len()),
         ("authSignatures", input.auth_signatures.len()),
+        ("deactivateKemPubKeys", input.deactivate_kem_pub_keys.len()),
+        (
+            "deactivateKemRandomness",
+            input.deactivate_kem_randomness.len(),
+        ),
+        (
+            "deactivateKemCiphertexts",
+            input.deactivate_kem_ciphertexts.len(),
+        ),
     ] {
         if actual != input.batch_size {
             return Err(ProofError::InvalidLength {
@@ -175,6 +185,7 @@ fn decrypt_deactivate_command(
         &input.msgs[i],
         &input.coord_priv_key,
         &input.enc_pub_keys[i],
+        &input.kem_ciphertexts[i],
     )?;
     Ok(DeactivateCommand {
         state_index: cmd.state_index,
@@ -229,13 +240,43 @@ fn process_one(
         &field_to_digest(&input.current_state_root),
     )?;
 
-    let new_status_is_odd =
-        decrypt_deactivation_flag(&input.c1[i], &input.c2[i], &input.coord_priv_key)?.1;
-    if valid != !new_status_is_odd {
+    let expected_user_kem_key =
+        crate::pq_kem::kem_public_key_compact(&input.deactivate_kem_pub_keys[i]);
+    if expected_user_kem_key != [state_leaf[0].clone(), state_leaf[1].clone()] {
         return Err(ProofError::CommitmentMismatch {
-            name: "deactivate status parity",
-            expected: Field::from(valid as u32),
-            actual: Field::from((!new_status_is_odd) as u32),
+            name: "deactivateKemPublicKey",
+            expected: hash_fields(&[state_leaf[0].clone(), state_leaf[1].clone()]),
+            actual: hash_fields(&expected_user_kem_key),
+        });
+    }
+    let (expected_deactivate_ciphertext, expected_c1, shared_key) =
+        crate::pq_kem::encapsulate_to_public_key_for_testing(
+            &input.deactivate_kem_pub_keys[i],
+            &input.deactivate_kem_randomness[i],
+        )?;
+    if expected_deactivate_ciphertext != input.deactivate_kem_ciphertexts[i] {
+        return Err(ProofError::CommitmentMismatch {
+            name: "deactivateKemCiphertext",
+            expected: hash_fields(&expected_c1),
+            actual: hash_fields(&crate::pq_kem::kem_ciphertext_compact(
+                &input.deactivate_kem_ciphertexts[i],
+            )),
+        });
+    }
+    let (expected_c1, expected_c2) =
+        crate::pq_kem::deactivate_ciphertext_fields(&input.deactivate_kem_ciphertexts[i]);
+    if expected_c1 != input.c1[i] {
+        return Err(ProofError::CommitmentMismatch {
+            name: "deactivate c1",
+            expected: hash_fields(&expected_c1),
+            actual: hash_fields(&input.c1[i]),
+        });
+    }
+    if expected_c2 != input.c2[i] {
+        return Err(ProofError::CommitmentMismatch {
+            name: "deactivate c2",
+            expected: hash_fields(&expected_c2),
+            actual: hash_fields(&input.c2[i]),
         });
     }
 
@@ -274,11 +315,7 @@ fn process_one(
         current_deactivate_root,
     )?;
 
-    let shared_key = ecdh_formatted_priv_key(
-        &input.coord_priv_key,
-        &[state_leaf[0].clone(), state_leaf[1].clone()],
-    );
-    let shared_key_hash = hash_fields(&shared_key);
+    let shared_key_hash = crate::pq_kem::shared_key_hash_fields(&shared_key);
     let deactivate_leaf_hash = hash_fields(&[
         input.c1[i][0].clone(),
         input.c1[i][1].clone(),

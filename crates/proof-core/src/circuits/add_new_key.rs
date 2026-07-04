@@ -1,5 +1,5 @@
 use crate::circuits::{assert_input_hash, coord_pub_key_hash};
-use crate::crypto::{ecdh_formatted_priv_key, native_rerandomize_ciphertext};
+use crate::crypto::native_rerandomize_ciphertext;
 use crate::error::{ProofError, ProofResult};
 use crate::hash_backend::{hash_fields, hash_pair};
 use crate::merkle::check_inclusion;
@@ -16,8 +16,26 @@ pub fn execute(input: &AddNewKeyInput) -> ProofResult<AddNewKeyPublicOutput> {
         });
     }
 
-    let shared_key = ecdh_formatted_priv_key(&input.old_private_key, &input.coord_pub_key);
-    let shared_key_hash = hash_fields(&shared_key);
+    let expected_c1 = crate::pq_kem::deactivate_ciphertext_fields(&input.deactivate_kem_ciphertext);
+    if expected_c1.0 != input.c1 {
+        return Err(ProofError::CommitmentMismatch {
+            name: "deactivate c1",
+            expected: hash_fields(&expected_c1.0),
+            actual: hash_fields(&input.c1),
+        });
+    }
+    if expected_c1.1 != input.c2 {
+        return Err(ProofError::CommitmentMismatch {
+            name: "deactivate c2",
+            expected: hash_fields(&expected_c1.1),
+            actual: hash_fields(&input.c2),
+        });
+    }
+    let shared_key = crate::pq_kem::decapsulate_to_fields(
+        &input.old_private_key,
+        &input.deactivate_kem_ciphertext,
+    )?;
+    let shared_key_hash = crate::pq_kem::shared_key_hash_fields(&shared_key);
     let expected_deactivate_leaf = hash_fields(&[
         input.c1[0].clone(),
         input.c1[1].clone(),

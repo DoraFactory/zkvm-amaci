@@ -4,15 +4,9 @@ use crate::hash_backend::hash_fields;
 use crate::native_types::{field_to_digest, NativeCommand};
 use num_traits::{One, Zero};
 use sha2::{Digest, Sha256};
-use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
 pub fn private_to_pub_key(formatted_priv_key: &Field) -> [Field; 2] {
-    native_key_material(formatted_priv_key).pub_key
-}
-
-pub fn ecdh_formatted_priv_key(formatted_priv_key: &Field, pub_key: &[Field; 2]) -> [Field; 2] {
-    ecdh_formatted_priv_key_native(formatted_priv_key, pub_key)
-        .unwrap_or_else(|_| [Field::from(0u32), Field::one()])
+    crate::pq_kem::private_to_pub_key(formatted_priv_key)
 }
 
 pub fn native_rerandomize_ciphertext(
@@ -44,88 +38,8 @@ pub fn native_rerandomize_ciphertext(
     (d1, d2)
 }
 
-struct NativeKeyMaterial {
-    x25519_secret: X25519StaticSecret,
-    pub_key: [Field; 2],
-}
-
-fn native_key_material(formatted_priv_key: &Field) -> NativeKeyMaterial {
-    let x25519_secret = X25519StaticSecret::from(native_x25519_secret_seed(formatted_priv_key));
-    let native_key_id = Field::from_be_bytes(native_key_id(formatted_priv_key));
-    let x_pub = Field::from_be_bytes(X25519PublicKey::from(&x25519_secret).to_bytes());
-    NativeKeyMaterial {
-        x25519_secret,
-        pub_key: [native_key_id, x_pub],
-    }
-}
-
-fn ecdh_formatted_priv_key_native(
-    formatted_priv_key: &Field,
-    pub_key: &[Field; 2],
-) -> ProofResult<[Field; 2]> {
-    if pub_key[1].is_zero() {
-        return Ok([Field::from(0u32), Field::one()]);
-    }
-    let secret = native_key_material(formatted_priv_key).x25519_secret;
-    let public = X25519PublicKey::from(field_to_fixed_be(
-        pub_key_x25519(pub_key),
-        "X25519 public key",
-    )?);
-    let shared = secret.diffie_hellman(&public);
-    let mut hasher = Sha256::new();
-    hasher.update(b"AMACI_ZKVM_NATIVE_X25519_SHARED_V1");
-    hasher.update(shared.to_bytes());
-    let digest: [u8; 32] = hasher.finalize().into();
-    Ok([
-        Field::from_be_slice(&digest[0..16]),
-        Field::from_be_slice(&digest[16..32]),
-    ])
-}
-
-fn native_key_id(formatted_priv_key: &Field) -> [u8; 32] {
-    native_seed(b"AMACI_ZKVM_NATIVE_KEY_ID_V1", formatted_priv_key)
-}
-
-fn native_x25519_secret_seed(formatted_priv_key: &Field) -> [u8; 32] {
-    native_seed(b"AMACI_ZKVM_NATIVE_X25519_SEED_V1", formatted_priv_key)
-}
-
-fn native_seed(domain: &[u8], formatted_priv_key: &Field) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    hasher.update(field_to_fixed_be_lossy(formatted_priv_key));
-    hasher.finalize().into()
-}
-
 pub fn native_command_message(packed_command: &[Field; 3]) -> ProofResult<[u8; 32]> {
     Ok(NativeCommand::from_packed_fields(packed_command)?.message_digest())
-}
-
-fn pub_key_x25519(pub_key: &[Field; 2]) -> &Field {
-    &pub_key[1]
-}
-
-fn field_to_fixed_be(value: &Field, name: &'static str) -> ProofResult<[u8; 32]> {
-    let mut out = [0u8; 32];
-    write_fixed_be(&mut out, value, name)?;
-    Ok(out)
-}
-
-fn write_fixed_be(out: &mut [u8], value: &Field, name: &'static str) -> ProofResult<()> {
-    let bytes: [u8; 32] = value.to_be_bytes();
-    if bytes[0..bytes.len().saturating_sub(out.len())]
-        .iter()
-        .any(|byte| *byte != 0)
-    {
-        return Err(ProofError::InvalidLength {
-            name,
-            expected: out.len(),
-            actual: bytes.len(),
-        });
-    }
-    let offset = bytes.len() - out.len();
-    out.copy_from_slice(&bytes[offset..]);
-    Ok(())
 }
 
 fn field_to_fixed_be_lossy(value: &Field) -> [u8; 32] {

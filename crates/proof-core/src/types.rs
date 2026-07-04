@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub type PubKey = [Field; 2];
 pub type AuthPublicKey = Vec<u8>;
 pub type AuthSignature = Vec<u8>;
+pub type KemCiphertext = Vec<u8>;
+pub type KemPublicKey = Vec<u8>;
 pub const MESSAGE_WORDS: usize = 10;
 pub const STATE_LEAF_WORDS: usize = 10;
 
@@ -37,6 +39,7 @@ pub struct ProcessMessagesInput {
     pub coord_pub_key: PubKey,
     pub msgs: Vec<Message>,
     pub enc_pub_keys: Vec<PubKey>,
+    pub kem_ciphertexts: Vec<KemCiphertext>,
     pub auth_pub_keys: Vec<AuthPublicKey>,
     pub auth_signatures: Vec<AuthSignature>,
     pub current_state_root: Field,
@@ -89,8 +92,12 @@ pub struct ProcessDeactivateInput {
     pub coord_pub_key: PubKey,
     pub msgs: Vec<Message>,
     pub enc_pub_keys: Vec<PubKey>,
+    pub kem_ciphertexts: Vec<KemCiphertext>,
     pub auth_pub_keys: Vec<AuthPublicKey>,
     pub auth_signatures: Vec<AuthSignature>,
+    pub deactivate_kem_pub_keys: Vec<KemPublicKey>,
+    pub deactivate_kem_randomness: Vec<Field>,
+    pub deactivate_kem_ciphertexts: Vec<KemCiphertext>,
     pub c1: Vec<PubKey>,
     pub c2: Vec<PubKey>,
     pub current_active_state: Vec<Field>,
@@ -116,6 +123,7 @@ pub struct AddNewKeyInput {
     pub deactivate_leaf: Field,
     pub c1: PubKey,
     pub c2: PubKey,
+    pub deactivate_kem_ciphertext: KemCiphertext,
     pub random_val: Field,
     pub d1: PubKey,
     pub d2: PubKey,

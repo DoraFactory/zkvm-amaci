@@ -1,9 +1,6 @@
 use crate::auth::verify_command_auth_signature;
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, hash2};
-use crate::crypto::{
-    decrypt_deactivation_flag, decrypt_without_check_array, ecdh_formatted_priv_key,
-    private_to_pub_key,
-};
+use crate::crypto::{decrypt_deactivation_flag, decrypt_without_check_array, private_to_pub_key};
 use crate::error::{ProofError, ProofResult};
 use crate::field::{ensure_bool, pow5, Field};
 use crate::merkle::{
@@ -159,6 +156,7 @@ fn validate_batch_witness_lengths(input: &ProcessMessagesInput) -> ProofResult<(
             "currentVoteWeightsPathElements",
             input.current_vote_weights_path_elements.len(),
         ),
+        ("kemCiphertexts", input.kem_ciphertexts.len()),
         ("authPubKeys", input.auth_pub_keys.len()),
         ("authSignatures", input.auth_signatures.len()),
     ] {
@@ -188,8 +186,17 @@ pub fn message_to_command(
     message: &Message,
     enc_priv_key: &Field,
     enc_pub_key: &[Field; 2],
+    kem_ciphertext: &[u8],
 ) -> ProofResult<Command> {
-    let shared_key = ecdh_formatted_priv_key(enc_priv_key, enc_pub_key);
+    let expected_compact = crate::pq_kem::kem_ciphertext_compact(kem_ciphertext);
+    if &expected_compact != enc_pub_key {
+        return Err(ProofError::CommitmentMismatch {
+            name: "messageKemCiphertext",
+            expected: crate::hash_backend::hash_fields(&expected_compact),
+            actual: crate::hash_backend::hash_fields(enc_pub_key),
+        });
+    }
+    let shared_key = crate::pq_kem::decapsulate_to_fields(enc_priv_key, kem_ciphertext)?;
     let decrypted = decrypt_without_check_array::<9>(message, &shared_key, &Field::from(0u32), 7)?;
     let unpacked = unpack_element_high_to_low(&decrypted[0], 7)?;
     let new_vote_weight = decode_vote_weight_96(&unpacked[1], &unpacked[2], &unpacked[3])?;
@@ -224,6 +231,7 @@ fn process_batch(
             &input.msgs[i],
             &input.coord_priv_key,
             &input.enc_pub_keys[i],
+            &input.kem_ciphertexts[i],
         )?;
         next_state_root = process_one(
             input,

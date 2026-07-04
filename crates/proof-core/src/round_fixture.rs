@@ -3,8 +3,8 @@ use crate::auth::{
 };
 use crate::circuits::process_messages::{message_chain, EmptyRule};
 use crate::crypto::{
-    decrypt_deactivation_flag, ecdh_formatted_priv_key, native_encrypt_for_testing,
-    native_rerandomize_ciphertext, private_to_pub_key,
+    decrypt_deactivation_flag, native_encrypt_for_testing, native_rerandomize_ciphertext,
+    private_to_pub_key,
 };
 use crate::error::ProofResult;
 use crate::field::Field;
@@ -56,6 +56,7 @@ pub struct RoundVote {
 struct User {
     priv_key: Field,
     pub_key: PubKey,
+    kem_pub_key: Vec<u8>,
     auth_pub_key: Vec<u8>,
     balance: Field,
     nonce: Field,
@@ -66,8 +67,10 @@ impl User {
     fn new(priv_key: u32, balance: u32) -> Self {
         let priv_key = Field::from(priv_key);
         let (auth_pub_key, _) = auth_keypair_from_seed_for_testing(&priv_key);
+        let kem_pub_key = crate::pq_kem::kem_public_key_from_seed_for_testing(&priv_key);
         Self {
             pub_key: private_to_pub_key(&priv_key),
+            kem_pub_key,
             auth_pub_key,
             priv_key,
             balance: Field::from(balance),
@@ -152,6 +155,7 @@ pub fn five_signup_round_fixture() -> ProofResult<FiveSignupRoundFixture> {
         &replacement,
         &deactivate_tree,
         deactivate_index0 + 1,
+        1,
     )?;
 
     users.push(replacement);
@@ -352,8 +356,12 @@ fn build_process_deactivate(
     let zero = Field::from(0u32);
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
+    let mut kem_ciphertexts = vec![Vec::new(); batch_size];
     let mut auth_pub_keys = vec![Vec::new(); batch_size];
     let mut auth_signatures = vec![Vec::new(); batch_size];
+    let mut deactivate_kem_pub_keys = vec![Vec::new(); batch_size];
+    let mut deactivate_kem_randomness = vec![zero; batch_size];
+    let mut deactivate_kem_ciphertexts = vec![Vec::new(); batch_size];
     let mut c1 = vec![[zero, zero]; batch_size];
     let mut c2 = vec![[zero, zero]; batch_size];
     let mut current_state_leaves = vec![[zero; 10]; batch_size];
@@ -365,13 +373,14 @@ fn build_process_deactivate(
 
     for (slot, state_index) in [3usize, 4usize].into_iter().enumerate() {
         let user = &users[state_index];
-        let enc_priv_key = Field::from(8001u32 + slot as u32);
-        let enc_pub_key = private_to_pub_key(&enc_priv_key);
         let command = command_fields(poll_id, state_index, 0, 0, 1, &user.pub_key);
         auth_pub_keys[slot] = user.auth_pub_key.clone();
         auth_signatures[slot] = sign_command_for_testing(&user.priv_key, &command);
-        msgs[slot] = encrypt_command(coord_priv_key, &enc_pub_key, command)?;
-        enc_pub_keys[slot] = enc_pub_key;
+        let encrypted =
+            encrypt_command(coord_priv_key, &Field::from(8001u32 + slot as u32), command)?;
+        msgs[slot] = encrypted.0;
+        enc_pub_keys[slot] = encrypted.1;
+        kem_ciphertexts[slot] = encrypted.2;
         current_state_leaves[slot] = user.state_leaf()?;
         current_state_paths[slot] = state_tree.path(state_index)?;
         active_paths[slot] = active_tree.path(state_index)?;
@@ -380,8 +389,20 @@ fn build_process_deactivate(
         new_active_state[slot] = active_leaf.clone();
         active_tree.set(state_index, active_leaf)?;
 
-        let shared_key = ecdh_formatted_priv_key(coord_priv_key, &user.pub_key);
-        let shared_key_hash = hash_fields(&shared_key);
+        let deactivate_randomness = Field::from(9001u32 + slot as u32);
+        let (deactivate_ciphertext, _, shared_key) =
+            crate::pq_kem::encapsulate_to_public_key_for_testing(
+                &user.kem_pub_key,
+                &deactivate_randomness,
+            )?;
+        let (c1_fields, c2_fields) =
+            crate::pq_kem::deactivate_ciphertext_fields(&deactivate_ciphertext);
+        c1[slot] = c1_fields;
+        c2[slot] = c2_fields;
+        deactivate_kem_pub_keys[slot] = user.kem_pub_key.clone();
+        deactivate_kem_randomness[slot] = deactivate_randomness;
+        deactivate_kem_ciphertexts[slot] = deactivate_ciphertext;
+        let shared_key_hash = crate::pq_kem::shared_key_hash_fields(&shared_key);
         let deactivate_leaf = hash_fields(&[
             c1[slot][0].clone(),
             c1[slot][1].clone(),
@@ -435,8 +456,12 @@ fn build_process_deactivate(
         coord_pub_key: coord_pub_key.clone(),
         msgs,
         enc_pub_keys,
+        kem_ciphertexts,
         auth_pub_keys,
         auth_signatures,
+        deactivate_kem_pub_keys,
+        deactivate_kem_randomness,
+        deactivate_kem_ciphertexts,
         c1,
         c2,
         current_active_state,
@@ -460,11 +485,16 @@ fn build_add_new_key(
     replacement: &User,
     deactivate_tree: &QuinTree,
     deactivate_index: usize,
+    deactivate_slot: usize,
 ) -> ProofResult<AddNewKeyInput> {
-    let c1 = [Field::from(0u32), Field::from(0u32)];
-    let c2 = [Field::from(0u32), Field::from(0u32)];
-    let shared_key = ecdh_formatted_priv_key(&old_user.priv_key, coord_pub_key);
-    let shared_key_hash = hash_fields(&shared_key);
+    let deactivate_randomness = Field::from(9001u32 + deactivate_slot as u32);
+    let (deactivate_kem_ciphertext, _, shared_key) =
+        crate::pq_kem::encapsulate_to_public_key_for_testing(
+            &old_user.kem_pub_key,
+            &deactivate_randomness,
+        )?;
+    let (c1, c2) = crate::pq_kem::deactivate_ciphertext_fields(&deactivate_kem_ciphertext);
+    let shared_key_hash = crate::pq_kem::shared_key_hash_fields(&shared_key);
     let deactivate_leaf = hash_fields(&[
         c1[0].clone(),
         c1[1].clone(),
@@ -499,6 +529,7 @@ fn build_add_new_key(
         deactivate_leaf,
         c1,
         c2,
+        deactivate_kem_ciphertext,
         random_val,
         d1,
         d2,
@@ -532,6 +563,7 @@ fn build_process_messages_batch(
     let dummy_index = 5usize.pow(state_tree_depth as u32) - 1;
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
+    let mut kem_ciphertexts = vec![Vec::new(); batch_size];
     let mut auth_pub_keys = vec![Vec::new(); batch_size];
     let mut auth_signatures = vec![Vec::new(); batch_size];
     let mut current_state_leaves = vec![[zero; 10]; batch_size];
@@ -550,8 +582,6 @@ fn build_process_messages_batch(
     for (command_offset, command) in commands.iter().enumerate() {
         let slot = batch_size - 1 - command_offset;
         let user = &users[command.state_index];
-        let enc_priv_key = Field::from(10_001u32 + slot as u32);
-        let enc_pub_key = private_to_pub_key(&enc_priv_key);
         let nonce = user.nonce.to_u32().unwrap_or(0) + 1;
         let command_fields = command_fields(
             poll_id,
@@ -563,8 +593,14 @@ fn build_process_messages_batch(
         );
         auth_pub_keys[slot] = user.auth_pub_key.clone();
         auth_signatures[slot] = sign_command_for_testing(&command.user_priv_key, &command_fields);
-        msgs[slot] = encrypt_command(coord_priv_key, &enc_pub_key, command_fields)?;
-        enc_pub_keys[slot] = enc_pub_key;
+        let encrypted = encrypt_command(
+            coord_priv_key,
+            &Field::from(10_001u32 + slot as u32),
+            command_fields,
+        )?;
+        msgs[slot] = encrypted.0;
+        enc_pub_keys[slot] = encrypted.1;
+        kem_ciphertexts[slot] = encrypted.2;
         current_state_leaves[slot] = user.state_leaf()?;
         current_state_paths[slot] = state_tree.path(command.state_index)?;
         active_state_leaves[slot] = active_tree.leaf(command.state_index).clone();
@@ -625,6 +661,7 @@ fn build_process_messages_batch(
         coord_pub_key: coord_pub_key.clone(),
         msgs,
         enc_pub_keys,
+        kem_ciphertexts,
         auth_pub_keys,
         auth_signatures,
         current_state_root,
@@ -778,11 +815,12 @@ fn command_fields(
 
 fn encrypt_command(
     coord_priv_key: &Field,
-    enc_pub_key: &PubKey,
+    randomness: &Field,
     command: [Field; 3],
-) -> ProofResult<Message> {
+) -> ProofResult<(Message, PubKey, Vec<u8>)> {
     let zero = Field::from(0u32);
-    let shared_key = ecdh_formatted_priv_key(coord_priv_key, enc_pub_key);
+    let (kem_ciphertext, compact, shared_key) =
+        crate::pq_kem::encapsulate_to_seed_for_testing(coord_priv_key, randomness)?;
     let mut plaintext = vec![
         command[0].clone(),
         command[1].clone(),
@@ -794,13 +832,14 @@ fn encrypt_command(
     ];
     plaintext.resize(9, zero.clone());
     let ciphertext = native_encrypt_for_testing(&plaintext, &shared_key, &zero, 7)?;
-    ciphertext
-        .try_into()
-        .map_err(|ciphertext: Vec<Field>| crate::ProofError::InvalidLength {
+    let message = ciphertext.try_into().map_err(|ciphertext: Vec<Field>| {
+        crate::ProofError::InvalidLength {
             name: "native message ciphertext",
             expected: 10,
             actual: ciphertext.len(),
-        })
+        }
+    })?;
+    Ok((message, compact, kem_ciphertext))
 }
 
 fn odd_deactivation_ciphertext(priv_key: &Field) -> ProofResult<(PubKey, PubKey)> {

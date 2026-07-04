@@ -221,6 +221,7 @@ fn encode_process_messages(out: &mut Vec<u8>, input: &ProcessMessagesInput) {
     write_pub_key(out, &input.coord_pub_key);
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
+    write_byte_vecs(out, &input.kem_ciphertexts);
     write_byte_vecs(out, &input.auth_pub_keys);
     write_byte_vecs(out, &input.auth_signatures);
     write_field(out, &input.current_state_root);
@@ -253,6 +254,7 @@ fn decode_process_messages(input: &mut Decoder<'_>) -> ProofResult<ProcessMessag
         coord_pub_key: input.read_pub_key("coordPubKey")?,
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
+        kem_ciphertexts: input.read_byte_vecs("kemCiphertexts")?,
         auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
         auth_signatures: input.read_byte_vecs("authSignatures")?,
         current_state_root: input.read_field("currentStateRoot")?,
@@ -327,8 +329,12 @@ fn encode_process_deactivate(out: &mut Vec<u8>, input: &ProcessDeactivateInput) 
     write_pub_key(out, &input.coord_pub_key);
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
+    write_byte_vecs(out, &input.kem_ciphertexts);
     write_byte_vecs(out, &input.auth_pub_keys);
     write_byte_vecs(out, &input.auth_signatures);
+    write_byte_vecs(out, &input.deactivate_kem_pub_keys);
+    write_fields(out, &input.deactivate_kem_randomness);
+    write_byte_vecs(out, &input.deactivate_kem_ciphertexts);
     write_pub_keys(out, &input.c1);
     write_pub_keys(out, &input.c2);
     write_fields(out, &input.current_active_state);
@@ -358,8 +364,12 @@ fn decode_process_deactivate(input: &mut Decoder<'_>) -> ProofResult<ProcessDeac
         coord_pub_key: input.read_pub_key("coordPubKey")?,
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
+        kem_ciphertexts: input.read_byte_vecs("kemCiphertexts")?,
         auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
         auth_signatures: input.read_byte_vecs("authSignatures")?,
+        deactivate_kem_pub_keys: input.read_byte_vecs("deactivateKemPubKeys")?,
+        deactivate_kem_randomness: input.read_fields("deactivateKemRandomness")?,
+        deactivate_kem_ciphertexts: input.read_byte_vecs("deactivateKemCiphertexts")?,
         c1: input.read_pub_keys("c1")?,
         c2: input.read_pub_keys("c2")?,
         current_active_state: input.read_fields("currentActiveState")?,
@@ -386,6 +396,7 @@ fn encode_add_new_key(out: &mut Vec<u8>, input: &AddNewKeyInput) {
     write_field(out, &input.deactivate_leaf);
     write_pub_key(out, &input.c1);
     write_pub_key(out, &input.c2);
+    write_byte_vec(out, &input.deactivate_kem_ciphertext);
     write_field(out, &input.random_val);
     write_pub_key(out, &input.d1);
     write_pub_key(out, &input.d2);
@@ -406,6 +417,7 @@ fn decode_add_new_key(input: &mut Decoder<'_>) -> ProofResult<AddNewKeyInput> {
         deactivate_leaf: input.read_field("deactivateLeaf")?,
         c1: input.read_pub_key("c1")?,
         c2: input.read_pub_key("c2")?,
+        deactivate_kem_ciphertext: input.read_byte_vec("deactivateKemCiphertext")?,
         random_val: input.read_field("randomVal")?,
         d1: input.read_pub_key("d1")?,
         d2: input.read_pub_key("d2")?,
