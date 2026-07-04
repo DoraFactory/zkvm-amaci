@@ -21,10 +21,8 @@ pub fn private_to_pub_key(formatted_priv_key: &Field) -> PubKey {
 }
 
 pub fn kem_public_key_from_seed_for_testing(seed: &Field) -> KemPublicKey {
-    decapsulation_key(seed)
-        .encapsulation_key()
-        .to_bytes()
-        .to_vec()
+    let bytes = decapsulation_key(seed).encapsulation_key().to_bytes();
+    fixed_public_key(bytes.as_ref())
 }
 
 pub fn encapsulate_to_seed_for_testing(
@@ -36,16 +34,16 @@ pub fn encapsulate_to_seed_for_testing(
 }
 
 pub fn encapsulate_to_public_key_for_testing(
-    public_key: &[u8],
+    public_key: &KemPublicKey,
     randomness: &Field,
 ) -> ProofResult<(KemCiphertext, PubKey, [Field; 2])> {
-    let key = ml_kem::kem::Key::<MlKem768EncapsulationKey>::try_from(public_key)
+    let key = ml_kem::kem::Key::<MlKem768EncapsulationKey>::try_from(public_key.as_ref())
         .map_err(|_| ProofError::Crypto("invalid ML-KEM-768 public key length".to_string()))?;
     let encapsulation_key = MlKem768EncapsulationKey::new(&key)
         .map_err(|_| ProofError::Crypto("invalid ML-KEM-768 public key".to_string()))?;
     let (ciphertext, shared_key) =
         encapsulation_key.encapsulate_deterministic(&B32::from(encapsulation_seed(randomness)));
-    let ciphertext = ciphertext.to_vec();
+    let ciphertext = fixed_ciphertext(ciphertext.as_ref());
     let compact = kem_ciphertext_compact(&ciphertext);
     Ok((
         ciphertext,
@@ -54,26 +52,37 @@ pub fn encapsulate_to_public_key_for_testing(
     ))
 }
 
-pub fn decapsulate_to_fields(recipient_seed: &Field, ciphertext: &[u8]) -> ProofResult<[Field; 2]> {
-    let ciphertext = Ciphertext::<MlKem768>::try_from(ciphertext)
+pub fn decapsulate_to_fields(
+    recipient_seed: &Field,
+    ciphertext: &KemCiphertext,
+) -> ProofResult<[Field; 2]> {
+    let ciphertext = Ciphertext::<MlKem768>::try_from(ciphertext.as_ref())
         .map_err(|_| ProofError::Crypto("invalid ML-KEM-768 ciphertext length".to_string()))?;
     let shared_key = decapsulation_key(recipient_seed).decapsulate(&ciphertext);
     Ok(shared_key_to_fields(shared_key.as_ref()))
 }
 
-pub fn kem_public_key_compact(public_key: &[u8]) -> PubKey {
-    compact_pair(b"public-key", public_key)
+pub fn kem_public_key_compact(public_key: &KemPublicKey) -> PubKey {
+    compact_pair(b"public-key", public_key.as_ref())
 }
 
-pub fn kem_ciphertext_compact(ciphertext: &[u8]) -> PubKey {
-    compact_pair(b"ciphertext", ciphertext)
+pub fn kem_ciphertext_compact(ciphertext: &KemCiphertext) -> PubKey {
+    compact_pair(b"ciphertext", ciphertext.as_ref())
 }
 
-pub fn deactivate_ciphertext_fields(ciphertext: &[u8]) -> (PubKey, PubKey) {
+pub fn deactivate_ciphertext_fields(ciphertext: &KemCiphertext) -> (PubKey, PubKey) {
     (
-        compact_pair(b"deactivate-c1", ciphertext),
-        compact_pair(b"deactivate-c2", ciphertext),
+        compact_pair(b"deactivate-c1", ciphertext.as_ref()),
+        compact_pair(b"deactivate-c2", ciphertext.as_ref()),
     )
+}
+
+fn fixed_public_key(bytes: &[u8]) -> KemPublicKey {
+    KemPublicKey::from_slice(bytes).expect("ML-KEM produced fixed public key length")
+}
+
+fn fixed_ciphertext(bytes: &[u8]) -> KemCiphertext {
+    KemCiphertext::from_slice(bytes).expect("ML-KEM produced fixed ciphertext length")
 }
 
 pub fn shared_key_hash_fields(shared_key: &[Field; 2]) -> Field {

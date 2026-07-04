@@ -12,7 +12,7 @@ use crate::packing::{
     decode_vote_weight_96, unpack_element_high_to_low, unpack_process_messages_packed_vals,
 };
 use crate::public_output::{public_value, ProcessMessagesPublicOutput};
-use crate::types::{Message, ProcessMessagesInput, StateLeaf};
+use crate::types::{KemCiphertext, Message, ProcessMessagesInput, StateLeaf};
 use num_traits::One;
 use std::sync::OnceLock;
 
@@ -186,7 +186,7 @@ pub fn message_to_command(
     message: &Message,
     enc_priv_key: &Field,
     enc_pub_key: &[Field; 2],
-    kem_ciphertext: &[u8],
+    kem_ciphertext: &KemCiphertext,
 ) -> ProofResult<Command> {
     let expected_compact = crate::pq_kem::kem_ciphertext_compact(kem_ciphertext);
     if &expected_compact != enc_pub_key {

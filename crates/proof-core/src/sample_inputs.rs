@@ -10,8 +10,8 @@ use crate::field::Field;
 use crate::hash_backend::{hash_fields, hash_pair, hash_public_inputs, hash_state_leaf};
 use crate::merkle::{hash5_exact, root_from_path, state_leaf_hash, zero_root};
 use crate::{
-    AddNewKeyInput, Message, PathElement, ProcessDeactivateInput, ProcessMessagesInput,
-    ProverInput, TallyVotesInput, VOTE_ROW_WORDS,
+    AddNewKeyInput, KemCiphertext, Message, PathElement, ProcessDeactivateInput,
+    ProcessMessagesInput, ProverInput, TallyVotesInput, VOTE_ROW_WORDS,
 };
 use num_traits::ToPrimitive;
 
@@ -73,7 +73,7 @@ fn build_process_messages_input(
 
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero.clone(), zero.clone()]; batch_size];
-    let mut kem_ciphertexts = vec![Vec::new(); batch_size];
+    let mut kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
     let mut auth_pub_keys = vec![Vec::new(); batch_size];
     let mut auth_signatures = vec![Vec::new(); batch_size];
     let zero_state_leaf = [zero; 10];
@@ -538,7 +538,7 @@ fn encrypt_command(
     coord_priv_key: &Field,
     randomness: &Field,
     command: [Field; 3],
-) -> ProofResult<(Message, [Field; 2], Vec<u8>)> {
+) -> ProofResult<(Message, [Field; 2], KemCiphertext)> {
     let zero = Field::from(0u32);
     let (kem_ciphertext, compact, shared_key) =
         crate::pq_kem::encapsulate_to_seed_for_testing(coord_priv_key, randomness)?;

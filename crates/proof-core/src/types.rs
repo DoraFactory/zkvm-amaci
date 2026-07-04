@@ -1,11 +1,93 @@
 use crate::field::Field;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub type PubKey = [Field; 2];
 pub type AuthPublicKey = Vec<u8>;
 pub type AuthSignature = Vec<u8>;
-pub type KemCiphertext = Vec<u8>;
-pub type KemPublicKey = Vec<u8>;
+pub const KEM_PUBLIC_KEY_BYTES: usize = 1184;
+pub const KEM_CIPHERTEXT_BYTES: usize = 1088;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KemCiphertext(pub [u8; KEM_CIPHERTEXT_BYTES]);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KemPublicKey(pub [u8; KEM_PUBLIC_KEY_BYTES]);
+
+impl KemCiphertext {
+    pub fn zero() -> Self {
+        Self([0u8; KEM_CIPHERTEXT_BYTES])
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        let array: [u8; KEM_CIPHERTEXT_BYTES] = bytes.try_into().ok()?;
+        Some(Self(array))
+    }
+}
+
+impl KemPublicKey {
+    pub fn zero() -> Self {
+        Self([0u8; KEM_PUBLIC_KEY_BYTES])
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        let array: [u8; KEM_PUBLIC_KEY_BYTES] = bytes.try_into().ok()?;
+        Some(Self(array))
+    }
+}
+
+impl AsRef<[u8]> for KemCiphertext {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for KemPublicKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Serialize for KemCiphertext {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(self.as_ref())
+    }
+}
+
+impl<'de> Deserialize<'de> for KemCiphertext {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        Self::from_slice(&bytes).ok_or_else(|| {
+            serde::de::Error::invalid_length(bytes.len(), &"ML-KEM-768 ciphertext length")
+        })
+    }
+}
+
+impl Serialize for KemPublicKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(self.as_ref())
+    }
+}
+
+impl<'de> Deserialize<'de> for KemPublicKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        Self::from_slice(&bytes).ok_or_else(|| {
+            serde::de::Error::invalid_length(bytes.len(), &"ML-KEM-768 public key length")
+        })
+    }
+}
 pub const MESSAGE_WORDS: usize = 10;
 pub const STATE_LEAF_WORDS: usize = 10;
 

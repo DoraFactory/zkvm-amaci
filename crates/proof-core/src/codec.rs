@@ -6,8 +6,9 @@ use crate::public_output::{
     TallyVotesPublicOutput,
 };
 use crate::types::{
-    AddNewKeyInput, Message, PathElement, PathElements, ProcessDeactivateInput,
-    ProcessMessagesInput, ProverInput, PubKey, StateLeaf, TallyVotesInput, VoteRow, VOTE_ROW_WORDS,
+    AddNewKeyInput, KemCiphertext, KemPublicKey, Message, PathElement, PathElements,
+    ProcessDeactivateInput, ProcessMessagesInput, ProverInput, PubKey, StateLeaf, TallyVotesInput,
+    VoteRow, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES, VOTE_ROW_WORDS,
 };
 use crate::PublicOutput;
 
@@ -221,7 +222,7 @@ fn encode_process_messages(out: &mut Vec<u8>, input: &ProcessMessagesInput) {
     write_pub_key(out, &input.coord_pub_key);
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
-    write_byte_vecs(out, &input.kem_ciphertexts);
+    write_kem_ciphertexts(out, &input.kem_ciphertexts);
     write_byte_vecs(out, &input.auth_pub_keys);
     write_byte_vecs(out, &input.auth_signatures);
     write_field(out, &input.current_state_root);
@@ -254,7 +255,7 @@ fn decode_process_messages(input: &mut Decoder<'_>) -> ProofResult<ProcessMessag
         coord_pub_key: input.read_pub_key("coordPubKey")?,
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
-        kem_ciphertexts: input.read_byte_vecs("kemCiphertexts")?,
+        kem_ciphertexts: input.read_kem_ciphertexts("kemCiphertexts")?,
         auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
         auth_signatures: input.read_byte_vecs("authSignatures")?,
         current_state_root: input.read_field("currentStateRoot")?,
@@ -329,12 +330,12 @@ fn encode_process_deactivate(out: &mut Vec<u8>, input: &ProcessDeactivateInput) 
     write_pub_key(out, &input.coord_pub_key);
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
-    write_byte_vecs(out, &input.kem_ciphertexts);
+    write_kem_ciphertexts(out, &input.kem_ciphertexts);
     write_byte_vecs(out, &input.auth_pub_keys);
     write_byte_vecs(out, &input.auth_signatures);
-    write_byte_vecs(out, &input.deactivate_kem_pub_keys);
+    write_kem_public_keys(out, &input.deactivate_kem_pub_keys);
     write_fields(out, &input.deactivate_kem_randomness);
-    write_byte_vecs(out, &input.deactivate_kem_ciphertexts);
+    write_kem_ciphertexts(out, &input.deactivate_kem_ciphertexts);
     write_pub_keys(out, &input.c1);
     write_pub_keys(out, &input.c2);
     write_fields(out, &input.current_active_state);
@@ -364,12 +365,12 @@ fn decode_process_deactivate(input: &mut Decoder<'_>) -> ProofResult<ProcessDeac
         coord_pub_key: input.read_pub_key("coordPubKey")?,
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
-        kem_ciphertexts: input.read_byte_vecs("kemCiphertexts")?,
+        kem_ciphertexts: input.read_kem_ciphertexts("kemCiphertexts")?,
         auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
         auth_signatures: input.read_byte_vecs("authSignatures")?,
-        deactivate_kem_pub_keys: input.read_byte_vecs("deactivateKemPubKeys")?,
+        deactivate_kem_pub_keys: input.read_kem_public_keys("deactivateKemPubKeys")?,
         deactivate_kem_randomness: input.read_fields("deactivateKemRandomness")?,
-        deactivate_kem_ciphertexts: input.read_byte_vecs("deactivateKemCiphertexts")?,
+        deactivate_kem_ciphertexts: input.read_kem_ciphertexts("deactivateKemCiphertexts")?,
         c1: input.read_pub_keys("c1")?,
         c2: input.read_pub_keys("c2")?,
         current_active_state: input.read_fields("currentActiveState")?,
@@ -396,7 +397,7 @@ fn encode_add_new_key(out: &mut Vec<u8>, input: &AddNewKeyInput) {
     write_field(out, &input.deactivate_leaf);
     write_pub_key(out, &input.c1);
     write_pub_key(out, &input.c2);
-    write_byte_vec(out, &input.deactivate_kem_ciphertext);
+    write_kem_ciphertext(out, &input.deactivate_kem_ciphertext);
     write_field(out, &input.random_val);
     write_pub_key(out, &input.d1);
     write_pub_key(out, &input.d2);
@@ -417,7 +418,7 @@ fn decode_add_new_key(input: &mut Decoder<'_>) -> ProofResult<AddNewKeyInput> {
         deactivate_leaf: input.read_field("deactivateLeaf")?,
         c1: input.read_pub_key("c1")?,
         c2: input.read_pub_key("c2")?,
-        deactivate_kem_ciphertext: input.read_byte_vec("deactivateKemCiphertext")?,
+        deactivate_kem_ciphertext: input.read_kem_ciphertext("deactivateKemCiphertext")?,
         random_val: input.read_field("randomVal")?,
         d1: input.read_pub_key("d1")?,
         d2: input.read_pub_key("d2")?,
@@ -469,6 +470,38 @@ fn write_byte_vecs(out: &mut Vec<u8>, values: &[Vec<u8>]) {
     write_usize(out, values.len());
     for value in values {
         write_byte_vec(out, value);
+    }
+}
+
+fn write_kem_public_key(out: &mut Vec<u8>, value: &KemPublicKey) {
+    if value.as_ref().iter().all(|byte| *byte == 0) {
+        out.push(0);
+    } else {
+        out.push(1);
+        out.extend_from_slice(value.as_ref());
+    }
+}
+
+fn write_kem_public_keys(out: &mut Vec<u8>, values: &[KemPublicKey]) {
+    write_usize(out, values.len());
+    for value in values {
+        write_kem_public_key(out, value);
+    }
+}
+
+fn write_kem_ciphertext(out: &mut Vec<u8>, value: &KemCiphertext) {
+    if value.as_ref().iter().all(|byte| *byte == 0) {
+        out.push(0);
+    } else {
+        out.push(1);
+        out.extend_from_slice(value.as_ref());
+    }
+}
+
+fn write_kem_ciphertexts(out: &mut Vec<u8>, values: &[KemCiphertext]) {
+    write_usize(out, values.len());
+    for value in values {
+        write_kem_ciphertext(out, value);
     }
 }
 
@@ -616,6 +649,50 @@ impl<'a> Decoder<'a> {
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
             out.push(self.read_byte_vec(name)?);
+        }
+        Ok(out)
+    }
+
+    fn read_kem_public_key(&mut self, name: &'static str) -> ProofResult<KemPublicKey> {
+        match self.read_u8(name)? {
+            0 => Ok(KemPublicKey::zero()),
+            1 => Ok(
+                KemPublicKey::from_slice(self.take(name, KEM_PUBLIC_KEY_BYTES)?)
+                    .expect("decoder returned exact ML-KEM public key byte length"),
+            ),
+            tag => Err(ProofError::Codec(format!(
+                "invalid {name} ML-KEM public key tag {tag}"
+            ))),
+        }
+    }
+
+    fn read_kem_public_keys(&mut self, name: &'static str) -> ProofResult<Vec<KemPublicKey>> {
+        let len = self.read_usize(name)?;
+        let mut out = Vec::with_capacity(len);
+        for _ in 0..len {
+            out.push(self.read_kem_public_key(name)?);
+        }
+        Ok(out)
+    }
+
+    fn read_kem_ciphertext(&mut self, name: &'static str) -> ProofResult<KemCiphertext> {
+        match self.read_u8(name)? {
+            0 => Ok(KemCiphertext::zero()),
+            1 => Ok(
+                KemCiphertext::from_slice(self.take(name, KEM_CIPHERTEXT_BYTES)?)
+                    .expect("decoder returned exact ML-KEM ciphertext byte length"),
+            ),
+            tag => Err(ProofError::Codec(format!(
+                "invalid {name} ML-KEM ciphertext tag {tag}"
+            ))),
+        }
+    }
+
+    fn read_kem_ciphertexts(&mut self, name: &'static str) -> ProofResult<Vec<KemCiphertext>> {
+        let len = self.read_usize(name)?;
+        let mut out = Vec::with_capacity(len);
+        for _ in 0..len {
+            out.push(self.read_kem_ciphertext(name)?);
         }
         Ok(out)
     }

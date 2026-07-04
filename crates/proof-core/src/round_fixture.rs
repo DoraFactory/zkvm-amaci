@@ -11,8 +11,9 @@ use crate::field::Field;
 use crate::hash_backend::{hash_fields, hash_pair, hash_public_inputs, hash_state_leaf};
 use crate::merkle::{hash5_exact, zero_root};
 use crate::types::{
-    AddNewKeyInput, Message, PathElement, PathElements, ProcessDeactivateInput,
-    ProcessMessagesInput, ProverInput, PubKey, StateLeaf, TallyVotesInput, VoteRow, VOTE_ROW_WORDS,
+    AddNewKeyInput, KemCiphertext, KemPublicKey, Message, PathElement, PathElements,
+    ProcessDeactivateInput, ProcessMessagesInput, ProverInput, PubKey, StateLeaf, TallyVotesInput,
+    VoteRow, VOTE_ROW_WORDS,
 };
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -56,7 +57,7 @@ pub struct RoundVote {
 struct User {
     priv_key: Field,
     pub_key: PubKey,
-    kem_pub_key: Vec<u8>,
+    kem_pub_key: KemPublicKey,
     auth_pub_key: Vec<u8>,
     balance: Field,
     nonce: Field,
@@ -356,12 +357,12 @@ fn build_process_deactivate(
     let zero = Field::from(0u32);
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
-    let mut kem_ciphertexts = vec![Vec::new(); batch_size];
+    let mut kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
     let mut auth_pub_keys = vec![Vec::new(); batch_size];
     let mut auth_signatures = vec![Vec::new(); batch_size];
-    let mut deactivate_kem_pub_keys = vec![Vec::new(); batch_size];
+    let mut deactivate_kem_pub_keys = vec![KemPublicKey::zero(); batch_size];
     let mut deactivate_kem_randomness = vec![zero; batch_size];
-    let mut deactivate_kem_ciphertexts = vec![Vec::new(); batch_size];
+    let mut deactivate_kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
     let mut c1 = vec![[zero, zero]; batch_size];
     let mut c2 = vec![[zero, zero]; batch_size];
     let mut current_state_leaves = vec![[zero; 10]; batch_size];
@@ -563,7 +564,7 @@ fn build_process_messages_batch(
     let dummy_index = 5usize.pow(state_tree_depth as u32) - 1;
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
-    let mut kem_ciphertexts = vec![Vec::new(); batch_size];
+    let mut kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
     let mut auth_pub_keys = vec![Vec::new(); batch_size];
     let mut auth_signatures = vec![Vec::new(); batch_size];
     let mut current_state_leaves = vec![[zero; 10]; batch_size];
@@ -817,7 +818,7 @@ fn encrypt_command(
     coord_priv_key: &Field,
     randomness: &Field,
     command: [Field; 3],
-) -> ProofResult<(Message, PubKey, Vec<u8>)> {
+) -> ProofResult<(Message, PubKey, KemCiphertext)> {
     let zero = Field::from(0u32);
     let (kem_ciphertext, compact, shared_key) =
         crate::pq_kem::encapsulate_to_seed_for_testing(coord_priv_key, randomness)?;
