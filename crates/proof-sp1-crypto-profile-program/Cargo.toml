@@ -1,0 +1,8 @@
+[package]
+name = "amaci-proof-sp1-crypto-profile-program"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+amaci-proof-core = { path = "../proof-core" }
+sp1-zkvm = "=6.3.0"

@@ -151,6 +151,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "amaci-proof-sp1-crypto-profile-host"
+version = "0.1.0"
+dependencies = [
+ "sp1-build",
+ "sp1-sdk",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "amaci-proof-sp1-crypto-profile-program"
+version = "0.1.0"
+dependencies = [
+ "amaci-proof-core",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "amaci-proof-sp1-host"
 version = "0.1.0"
 dependencies = [

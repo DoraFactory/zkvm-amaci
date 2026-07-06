@@ -6,6 +6,8 @@ members = [
     "crates/proof-risc0-methods",
     "crates/proof-sp1-host",
     "crates/proof-sp1-program",
+    "crates/proof-sp1-crypto-profile-host",
+    "crates/proof-sp1-crypto-profile-program",
     "crates/cosmwasm-sp1-verifier",
     "crates/cosmwasm-amaci-round",
 ]

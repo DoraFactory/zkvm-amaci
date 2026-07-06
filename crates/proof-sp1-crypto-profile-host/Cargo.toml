@@ -1,0 +1,11 @@
+[package]
+name = "amaci-proof-sp1-crypto-profile-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-sdk = { version = "=6.3.0", features = ["blocking"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+sp1-build = "=6.3.0"
