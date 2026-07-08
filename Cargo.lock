@@ -151,6 +151,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "amaci-proof-sp1-aggregate-host"
+version = "0.1.0"
+dependencies = [
+ "amaci-proof-core",
+ "base64 0.22.1",
+ "bincode",
+ "serde_json",
+ "sp1-build",
+ "sp1-sdk",
+ "sp1-verifier",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "amaci-proof-sp1-aggregate-program"
+version = "0.1.0"
+dependencies = [
+ "amaci-proof-core",
+ "sha2 0.10.9",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "amaci-proof-sp1-crypto-profile-host"
 version = "0.1.0"
 dependencies = [
@@ -6617,6 +6640,7 @@ dependencies = [
  "libm",
  "rand 0.8.6",
  "sha2 0.10.9",
+ "slop-algebra",
  "sp1-lib",
  "sp1-primitives",
 ]

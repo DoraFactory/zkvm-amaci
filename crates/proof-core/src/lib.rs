@@ -4,6 +4,7 @@
 //! should only deserialize [`ProverInput`], call [`execute_proof_logic`], and
 //! commit the returned [`PublicOutput`].
 
+pub mod aggregate;
 pub mod auth;
 pub mod circuits;
 pub mod codec;
@@ -21,6 +22,7 @@ pub mod round_fixture;
 pub mod sample_inputs;
 pub mod types;
 
+pub use aggregate::*;
 pub use error::{ProofError, ProofResult};
 pub use execute::execute_proof_logic;
 pub use field::Field;
