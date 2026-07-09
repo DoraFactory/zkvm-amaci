@@ -23,6 +23,12 @@ pub enum ExecuteMsg {
         public_values: Binary,
         vkey_hash: Binary,
     },
+    VerifyCompressedAggregateStage {
+        stage: RoundStage,
+        proof: Binary,
+        public_values: Binary,
+        vkey_hash: Binary,
+    },
 }
 
 #[cw_serde]

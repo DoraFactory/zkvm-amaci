@@ -20,6 +20,21 @@ pub enum ContractError {
         actual: RoundStage,
     },
 
+    #[error("aggregate stage is not supported: {stage:?}")]
+    UnsupportedAggregateStage { stage: RoundStage },
+
+    #[error("aggregate public output stage mismatch: expected {expected:?}, got {actual:?}")]
+    AggregateStageMismatch {
+        expected: RoundStage,
+        actual: RoundStage,
+    },
+
+    #[error("invalid aggregate public output: {reason}")]
+    InvalidAggregatePublicOutput { reason: String },
+
+    #[error("aggregate child count exceeds remaining stage count: remaining {remaining}, child_count {child_count}")]
+    AggregateChildCountTooLarge { remaining: u32, child_count: u32 },
+
     #[error("round plan must include at least one proof stage")]
     EmptyRoundPlan,
 }

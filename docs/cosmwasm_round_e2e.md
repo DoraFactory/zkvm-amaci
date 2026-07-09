@@ -10,8 +10,10 @@ processDeactivate -> addNewKey -> processMessages[*] -> tally[*]
 
 Each step verifies an SP1 compressed proof with
 `SP1CompressedVerifierRaw::verify_with_public_values`, then advances the round
-state. The contract is intentionally an E2E cost harness, not the production
-AMACI business contract.
+state. The contract also supports aggregate compressed proofs for repeated
+operator stages (`processMessages[*]` and `tally[*]`) while keeping the original
+per-stage proof path. The contract is intentionally an E2E cost harness, not the
+production AMACI business contract.
 
 Build the contract:
 
@@ -99,3 +101,49 @@ node scripts/run_cosmwasm_round_e2e.mjs \
 `fixtures/round-e2e.local.example.json` still exists as a cheap verifier-cost
 smoke test. It may point every stage at one downloaded proof message. Use
 `fixtures/round-e2e.five-signup.example.json` for the real round.
+
+## Aggregate Proof Round
+
+After the proving machine has produced aggregate artifacts:
+
+```text
+sp1-proofs/five-signup-process-messages.aggregate.sp1-compressed-proof.bytes
+sp1-proofs/five-signup-process-messages.aggregate.public.bin
+sp1-proofs/five-signup-process-messages.aggregate.vkey.bin
+sp1-proofs/five-signup-tally.aggregate.sp1-compressed-proof.bytes
+sp1-proofs/five-signup-tally.aggregate.public.bin
+sp1-proofs/five-signup-tally.aggregate.vkey.bin
+```
+
+Build the aggregate execute messages:
+
+```bash
+scripts/make_cosmwasm_sp1_aggregate_msg.sh process-messages \
+  > sp1-proofs/five-signup-process-messages.aggregate.verify-compressed-aggregate.msg.json
+
+scripts/make_cosmwasm_sp1_aggregate_msg.sh tally \
+  > sp1-proofs/five-signup-tally.aggregate.verify-compressed-aggregate.msg.json
+```
+
+Then run the aggregate E2E manifest:
+
+```bash
+npm run build:round-contract
+node scripts/run_cosmwasm_round_e2e.mjs \
+  --manifest fixtures/round-e2e.aggregate.example.json
+```
+
+The round plan remains:
+
+```json
+{
+  "process_deactivate": 1,
+  "add_new_key": 1,
+  "process_messages": 1,
+  "tally": 2
+}
+```
+
+The aggregate execute path verifies one aggregate proof and advances the stage
+by the aggregate public output's `child_count`. For the five-signup fixture,
+`processMessages` has `child_count=1`, while `tally` has `child_count=2`.

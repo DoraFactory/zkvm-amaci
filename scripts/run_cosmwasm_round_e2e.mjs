@@ -83,18 +83,29 @@ function feeForGas(gas, gasPricePeaka, denom) {
 }
 
 function wrapStageMessage(stage, verifyMsg) {
-  if (!verifyMsg.verify_compressed) {
-    throw new Error(`stage ${stage} msg must contain verify_compressed`);
+  if (verifyMsg.verify_compressed_aggregate) {
+    const { proof, public_values, vkey_hash } = verifyMsg.verify_compressed_aggregate;
+    return {
+      verify_compressed_aggregate_stage: {
+        stage,
+        proof,
+        public_values,
+        vkey_hash,
+      },
+    };
   }
-  const { proof, public_values, vkey_hash } = verifyMsg.verify_compressed;
-  return {
-    verify_compressed_stage: {
-      stage,
-      proof,
-      public_values,
-      vkey_hash,
-    },
-  };
+  if (verifyMsg.verify_compressed) {
+    const { proof, public_values, vkey_hash } = verifyMsg.verify_compressed;
+    return {
+      verify_compressed_stage: {
+        stage,
+        proof,
+        public_values,
+        vkey_hash,
+      },
+    };
+  }
+  throw new Error(`stage ${stage} msg must contain verify_compressed or verify_compressed_aggregate`);
 }
 
 function txSummary(label, result, costGasPricePeaka, extra = {}) {
