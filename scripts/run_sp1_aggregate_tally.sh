@@ -14,12 +14,13 @@ Defaults:
 
 Environment:
   CARGO_TARGET_DIR  Cargo target directory. Default: /tmp/zkvm-amaci-sp1-agg-target
+  AGGREGATE_PREFIX  Artifact prefix. Default: five-signup-tally
 
 Outputs:
   logs/sp1-aggregate-tally-<stamp>.log
   metrics/sp1-aggregate-tally-<stamp>.time.txt
   metrics/sp1-aggregate-tally-<stamp>.metrics.txt
-  sp1-proofs/five-signup-tally.aggregate.*
+  sp1-proofs/<AGGREGATE_PREFIX>.aggregate.*
 USAGE
 }
 
@@ -48,17 +49,18 @@ done
 
 stamp="$(date +%Y%m%d-%H%M%S)"
 target_dir="${CARGO_TARGET_DIR:-/tmp/zkvm-amaci-sp1-agg-target}"
+aggregate_prefix="${AGGREGATE_PREFIX:-five-signup-tally}"
 mkdir -p logs metrics sp1-proofs
 
 log="logs/sp1-aggregate-tally-${stamp}.log"
 time_log="metrics/sp1-aggregate-tally-${stamp}.time.txt"
 metrics="metrics/sp1-aggregate-tally-${stamp}.metrics.txt"
 
-proof="sp1-proofs/five-signup-tally.aggregate.sp1-compressed-proof.bin"
-proof_bytes="sp1-proofs/five-signup-tally.aggregate.sp1-compressed-proof.bytes"
-public="sp1-proofs/five-signup-tally.aggregate.public.json"
-public_bytes="sp1-proofs/five-signup-tally.aggregate.public.bin"
-vkey="sp1-proofs/five-signup-tally.aggregate.vkey.bin"
+proof="sp1-proofs/${aggregate_prefix}.aggregate.sp1-compressed-proof.bin"
+proof_bytes="sp1-proofs/${aggregate_prefix}.aggregate.sp1-compressed-proof.bytes"
+public="sp1-proofs/${aggregate_prefix}.aggregate.public.json"
+public_bytes="sp1-proofs/${aggregate_prefix}.aggregate.public.bin"
+vkey="sp1-proofs/${aggregate_prefix}.aggregate.vkey.bin"
 
 child_args=()
 for child_msg in "${child_msgs[@]}"; do
@@ -68,6 +70,7 @@ done
 {
   echo "stamp=$stamp"
   echo "target_dir=$target_dir"
+  echo "aggregate_prefix=$aggregate_prefix"
   printf "child_msgs=%s\n" "${child_msgs[*]}"
   echo "proof=$proof"
   echo "proof_bytes=$proof_bytes"
@@ -95,6 +98,7 @@ done
   echo "log=$log"
   echo "time_log=$time_log"
   echo "target_dir=$target_dir"
+  echo "aggregate_prefix=$aggregate_prefix"
   printf "child_msgs=%s\n" "${child_msgs[*]}"
   echo "child_count=${#child_msgs[@]}"
   echo "proof=$proof"

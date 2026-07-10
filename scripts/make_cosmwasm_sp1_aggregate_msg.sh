@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 usage:
-  scripts/make_cosmwasm_sp1_aggregate_msg.sh [process-messages|tally]
+  scripts/make_cosmwasm_sp1_aggregate_msg.sh [process-messages|tally] [artifact-prefix]
 
 Builds a CosmWasm execute message payload for the AMACI round aggregate verifier.
 
@@ -25,10 +25,10 @@ fi
 kind="${1:-process-messages}"
 case "$kind" in
   process-messages)
-    prefix="sp1-proofs/five-signup-process-messages.aggregate"
+    default_prefix="sp1-proofs/five-signup-process-messages.aggregate"
     ;;
   tally)
-    prefix="sp1-proofs/five-signup-tally.aggregate"
+    default_prefix="sp1-proofs/five-signup-tally.aggregate"
     ;;
   *)
     echo "unknown aggregate kind: $kind" >&2
@@ -36,6 +36,7 @@ case "$kind" in
     exit 2
     ;;
 esac
+prefix="${2:-$default_prefix}"
 
 proof="${prefix}.sp1-compressed-proof.bytes"
 public_values="${prefix}.public.bin"

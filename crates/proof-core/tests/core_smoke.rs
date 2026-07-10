@@ -1,3 +1,6 @@
+use amaci_proof_core::aggregate::{
+    build_process_messages_aggregate_public_output, build_tally_aggregate_public_output,
+};
 use amaci_proof_core::auth::{
     auth_keypair_from_seed_for_testing, auth_public_key_hash, sign_command_for_testing,
     verify_command_auth_signature,
@@ -18,7 +21,7 @@ use amaci_proof_core::packing::{
     unpack_process_messages_packed_vals, unpack_tally_packed_vals,
 };
 use amaci_proof_core::public_output::public_value;
-use amaci_proof_core::round_fixture::five_signup_round_fixture;
+use amaci_proof_core::round_fixture::{fifteen_signup_round_fixture, five_signup_round_fixture};
 use amaci_proof_core::{execute_proof_logic, Field, ProverInput, PublicOutput};
 use num_traits::{One, ToPrimitive};
 
@@ -313,4 +316,95 @@ fn five_signup_round_fixture_executes_and_links_public_state() {
         tally_0.new_tally_commitment,
         tally_1.current_tally_commitment
     );
+}
+
+#[test]
+fn fifteen_signup_round_fixture_executes_and_links_aggregated_batches() {
+    let fixture = fifteen_signup_round_fixture().unwrap();
+    assert_eq!(fixture.initial_signups, 15);
+    assert_eq!(fixture.final_signups, 16);
+    assert_eq!(fixture.message_count, 15);
+    assert_eq!(
+        fixture
+            .votes
+            .iter()
+            .filter(|vote| vote.expected_valid)
+            .count(),
+        13
+    );
+    assert_eq!(fixture.expected_raw_results, [3, 6, 6, 8, 15]);
+    assert_eq!(fixture.stages.len(), 9);
+
+    for stage in &fixture.stages {
+        let loaded = amaci_proof_core::sample_inputs::built_in_input(&stage.name)
+            .unwrap()
+            .expect("fifteen-signup stage is a built-in input");
+        assert_eq!(loaded, stage.input);
+        assert_eq!(decode_input(&encode_input(&loaded)).unwrap(), loaded);
+    }
+
+    let outputs = fixture
+        .stages
+        .iter()
+        .map(|stage| execute_proof_logic(&stage.input).unwrap())
+        .collect::<Vec<_>>();
+    let encoded_outputs = outputs.iter().map(encode_public_output).collect::<Vec<_>>();
+
+    let PublicOutput::ProcessDeactivate(deactivate) = &outputs[0] else {
+        panic!("stage 0 must be process deactivate");
+    };
+    let PublicOutput::AddNewKey(add_key) = &outputs[1] else {
+        panic!("stage 1 must be add new key");
+    };
+    assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
+
+    let process_aggregate =
+        build_process_messages_aggregate_public_output(&encoded_outputs[2..5]).unwrap();
+    assert_eq!(process_aggregate.child_count, 3);
+    for pair in outputs[2..5].windows(2) {
+        let (PublicOutput::ProcessMessages(current), PublicOutput::ProcessMessages(next)) =
+            (&pair[0], &pair[1])
+        else {
+            panic!("process message stages must be consecutive");
+        };
+        assert_eq!(current.batch_end_hash, next.batch_start_hash);
+        assert_eq!(current.new_state_commitment, next.current_state_commitment);
+    }
+
+    let tally_aggregate = build_tally_aggregate_public_output(&encoded_outputs[5..9]).unwrap();
+    assert_eq!(tally_aggregate.child_count, 4);
+    assert_eq!(tally_aggregate.first_batch_num, 0);
+    assert_eq!(tally_aggregate.last_batch_num, 3);
+    for pair in outputs[5..9].windows(2) {
+        let (PublicOutput::TallyVotes(current), PublicOutput::TallyVotes(next)) =
+            (&pair[0], &pair[1])
+        else {
+            panic!("tally stages must be consecutive");
+        };
+        assert_eq!(current.new_tally_commitment, next.current_tally_commitment);
+    }
+
+    let PublicOutput::ProcessMessages(final_messages) = &outputs[4] else {
+        panic!("stage 4 must be process messages");
+    };
+    let PublicOutput::TallyVotes(first_tally) = &outputs[5] else {
+        panic!("stage 5 must be tally");
+    };
+    assert_eq!(
+        final_messages.new_state_commitment,
+        first_tally.state_commitment
+    );
+
+    let mut final_raw_results = [0u128; 5];
+    for stage in &fixture.stages {
+        let ProverInput::TallyVotes(input) = &stage.input else {
+            continue;
+        };
+        for vote_row in &input.votes {
+            for (idx, vote) in vote_row.iter().enumerate() {
+                final_raw_results[idx] += vote.to_u128().expect("fixture vote fits in u128");
+            }
+        }
+    }
+    assert_eq!(final_raw_results, fixture.expected_raw_results);
 }

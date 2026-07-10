@@ -19,6 +19,7 @@ use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 pub const FIVE_SIGNUP_ROUND_ID: &str = "five-signup-2-1-1-5";
+pub const FIFTEEN_SIGNUP_ROUND_ID: &str = "fifteen-signup-15-message-2-1-1-5";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundStageInput {
@@ -36,6 +37,24 @@ pub struct FiveSignupRoundFixture {
     pub tally_batch_size: usize,
     pub initial_signups: usize,
     pub final_signups: usize,
+    pub deactivate_state_indices: Vec<u32>,
+    pub add_new_key_old_state_index: u32,
+    pub add_new_key_new_state_index: u32,
+    pub votes: Vec<RoundVote>,
+    pub expected_raw_results: [u128; VOTE_ROW_WORDS],
+    pub stages: Vec<RoundStageInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FifteenSignupRoundFixture {
+    pub round_id: String,
+    pub state_tree_depth: usize,
+    pub vote_option_tree_depth: usize,
+    pub process_message_batch_size: usize,
+    pub tally_batch_size: usize,
+    pub initial_signups: usize,
+    pub final_signups: usize,
+    pub message_count: usize,
     pub deactivate_state_indices: Vec<u32>,
     pub add_new_key_old_state_index: u32,
     pub add_new_key_new_state_index: u32,
@@ -146,6 +165,7 @@ pub fn five_signup_round_fixture() -> ProofResult<FiveSignupRoundFixture> {
         &mut active_tree,
         &mut deactivate_tree,
         &users,
+        [3, 4],
         deactivate_index0,
     )?;
 
@@ -333,6 +353,196 @@ pub fn five_signup_round_fixture() -> ProofResult<FiveSignupRoundFixture> {
     })
 }
 
+pub fn fifteen_signup_round_fixture() -> ProofResult<FifteenSignupRoundFixture> {
+    let state_tree_depth = 2;
+    let vote_option_tree_depth = 1;
+    let batch_size = 5;
+    let initial_signups = 15usize;
+    let final_signups = 16usize;
+    let poll_id = Field::from(1u32);
+    let coord_priv_key = Field::from(1001u32);
+    let coord_pub_key = private_to_pub_key(&coord_priv_key);
+    let state_tree_size = 5usize.pow(state_tree_depth as u32);
+    let deactivate_tree_depth = state_tree_depth + 2;
+    let deactivate_tree_size = 5usize.pow(deactivate_tree_depth as u32);
+    let deactivate_index0 = 47usize;
+    let deactivate_state_indices = [13usize, 14usize];
+
+    let mut users = (0..initial_signups)
+        .map(|idx| User::new(7001 + idx as u32, 20))
+        .collect::<Vec<_>>();
+    let replacement = User::new(9001, 20);
+
+    let zero_state_leaf = [Field::from(0u32); 10];
+    let zero_state_leaf_hash = hash_state_leaf(&zero_state_leaf)?;
+    let mut state_hashes = vec![zero_state_leaf_hash; state_tree_size];
+    for (idx, user) in users.iter().enumerate() {
+        state_hashes[idx] = hash_state_leaf(&user.state_leaf()?)?;
+    }
+    let mut state_tree = QuinTree::new(state_hashes, state_tree_depth)?;
+    let mut active_tree = QuinTree::zeros(state_tree_size, state_tree_depth)?;
+    let mut deactivate_tree = QuinTree::zeros(deactivate_tree_size, deactivate_tree_depth)?;
+
+    let process_deactivate = build_process_deactivate(
+        &coord_priv_key,
+        &coord_pub_key,
+        &poll_id,
+        &state_tree,
+        &mut active_tree,
+        &mut deactivate_tree,
+        &users,
+        deactivate_state_indices,
+        deactivate_index0,
+    )?;
+    let add_new_key = build_add_new_key(
+        &coord_pub_key,
+        &poll_id,
+        &users[deactivate_state_indices[1]],
+        &replacement,
+        &deactivate_tree,
+        deactivate_index0 + 1,
+        1,
+    )?;
+
+    users.push(replacement);
+    state_tree.set(15, hash_state_leaf(&users[15].state_leaf()?)?)?;
+
+    let mut message_commands = Vec::with_capacity(15);
+    message_commands.push(VoteCommand {
+        state_index: 13,
+        vote_option_index: 1,
+        new_vote_weight: 2,
+        valid: false,
+        user_priv_key: users[13].priv_key.clone(),
+        new_pub_key: users[13].pub_key.clone(),
+    });
+    message_commands.push(VoteCommand {
+        state_index: 14,
+        vote_option_index: 2,
+        new_vote_weight: 3,
+        valid: false,
+        user_priv_key: users[14].priv_key.clone(),
+        new_pub_key: users[14].pub_key.clone(),
+    });
+    for state_index in 0..12usize {
+        let vote_option_index = state_index % VOTE_ROW_WORDS;
+        message_commands.push(VoteCommand {
+            state_index,
+            vote_option_index,
+            new_vote_weight: vote_option_index as u32 + 1,
+            valid: true,
+            user_priv_key: users[state_index].priv_key.clone(),
+            new_pub_key: users[state_index].pub_key.clone(),
+        });
+    }
+    message_commands.push(VoteCommand {
+        state_index: 15,
+        vote_option_index: 4,
+        new_vote_weight: 5,
+        valid: true,
+        user_priv_key: users[15].priv_key.clone(),
+        new_pub_key: users[15].pub_key.clone(),
+    });
+
+    let mut stages = vec![
+        RoundStageInput {
+            name: "fifteen-signup-process-deactivate".to_string(),
+            stage: "process_deactivate".to_string(),
+            input: ProverInput::ProcessDeactivate(process_deactivate),
+        },
+        RoundStageInput {
+            name: "fifteen-signup-add-new-key".to_string(),
+            stage: "add_new_key".to_string(),
+            input: ProverInput::AddNewKey(add_new_key),
+        },
+    ];
+
+    let mut batch_start_hash = Field::from(0u32);
+    for batch_num in 0..3usize {
+        let input = build_process_messages_batch(
+            &coord_priv_key,
+            &coord_pub_key,
+            &poll_id,
+            batch_size,
+            final_signups as u32,
+            batch_start_hash,
+            Field::from(30u32 + batch_num as u32),
+            Field::from(31u32 + batch_num as u32),
+            &active_tree,
+            &deactivate_tree,
+            &mut state_tree,
+            &mut users,
+            &message_commands[batch_num * batch_size..(batch_num + 1) * batch_size],
+        )?;
+        batch_start_hash = input.batch_end_hash.clone();
+        stages.push(RoundStageInput {
+            name: format!("fifteen-signup-process-messages-{batch_num}"),
+            stage: "process_messages".to_string(),
+            input: ProverInput::ProcessMessages(input),
+        });
+    }
+
+    let mut current_results = vec![Field::from(0u32); VOTE_ROW_WORDS];
+    let mut current_results_root_salt = Field::from(0u32);
+    for batch_num in 0..4usize {
+        let new_results_root_salt = Field::from(41u32 + batch_num as u32);
+        let input = build_tally_batch(
+            state_tree_depth,
+            1,
+            vote_option_tree_depth,
+            final_signups as u32,
+            batch_num as u32,
+            &state_tree,
+            &users,
+            &current_results,
+            &current_results_root_salt,
+            &new_results_root_salt,
+        )?;
+        current_results = tally_encoded_results(&current_results, &input.votes);
+        current_results_root_salt = new_results_root_salt;
+        stages.push(RoundStageInput {
+            name: format!("fifteen-signup-tally-{batch_num}"),
+            stage: "tally".to_string(),
+            input: ProverInput::TallyVotes(input),
+        });
+    }
+
+    let mut votes = Vec::with_capacity(message_commands.len());
+    for command in &message_commands {
+        votes.push(RoundVote {
+            state_index: command.state_index as u32,
+            vote_option_index: command.vote_option_index as u32,
+            new_vote_weight: command.new_vote_weight,
+            expected_valid: command.valid,
+            note: if command.valid {
+                "valid vote".to_string()
+            } else {
+                "old key after deactivate".to_string()
+            },
+        });
+    }
+
+    Ok(FifteenSignupRoundFixture {
+        round_id: FIFTEEN_SIGNUP_ROUND_ID.to_string(),
+        state_tree_depth,
+        vote_option_tree_depth,
+        process_message_batch_size: batch_size,
+        tally_batch_size: batch_size,
+        initial_signups,
+        final_signups,
+        message_count: message_commands.len(),
+        deactivate_state_indices: deactivate_state_indices
+            .into_iter()
+            .map(|idx| idx as u32)
+            .collect(),
+        add_new_key_old_state_index: 14,
+        add_new_key_new_state_index: 15,
+        votes,
+        expected_raw_results: [3, 6, 6, 8, 15],
+        stages,
+    })
+}
+
 pub fn five_signup_stage_input(name: &str) -> ProofResult<Option<ProverInput>> {
     let fixture = five_signup_round_fixture()?;
     Ok(fixture
@@ -340,6 +550,18 @@ pub fn five_signup_stage_input(name: &str) -> ProofResult<Option<ProverInput>> {
         .into_iter()
         .find(|stage| stage.name == name)
         .map(|stage| stage.input))
+}
+
+pub fn round_stage_input(name: &str) -> ProofResult<Option<ProverInput>> {
+    if name.starts_with("fifteen-signup-") {
+        let fixture = fifteen_signup_round_fixture()?;
+        return Ok(fixture
+            .stages
+            .into_iter()
+            .find(|stage| stage.name == name)
+            .map(|stage| stage.input));
+    }
+    five_signup_stage_input(name)
 }
 
 fn build_process_deactivate(
@@ -350,6 +572,7 @@ fn build_process_deactivate(
     active_tree: &mut QuinTree,
     deactivate_tree: &mut QuinTree,
     users: &[User],
+    deactivate_state_indices: [usize; 2],
     deactivate_index0: usize,
 ) -> ProofResult<ProcessDeactivateInput> {
     let batch_size = 5;
@@ -372,7 +595,7 @@ fn build_process_deactivate(
     let current_active_state = vec![zero; batch_size];
     let mut new_active_state = vec![Field::from(1u32); batch_size];
 
-    for (slot, state_index) in [3usize, 4usize].into_iter().enumerate() {
+    for (slot, state_index) in deactivate_state_indices.into_iter().enumerate() {
         let user = &users[state_index];
         let command = command_fields(poll_id, state_index, 0, 0, 1, &user.pub_key);
         auth_pub_keys[slot] = user.auth_pub_key.clone();

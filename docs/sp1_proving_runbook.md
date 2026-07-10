@@ -165,6 +165,95 @@ Copy those files back to the local machine, then use
 `fixtures/round-e2e.five-signup.example.json` with
 `scripts/run_cosmwasm_round_e2e.mjs` to measure the real on-chain round cost.
 
+### Fifteen-Signup Aggregation Benchmark
+
+The larger fixture keeps the `2-1-1-5` per-proof capacity and executes a full
+round with:
+
+- 15 initial signups;
+- two deactivated old keys;
+- one replacement key appended by `AddNewKey`, for 16 final state leaves;
+- 15 vote messages split across three `processMessages` batches;
+- 16 state leaves split across four `tally` batches;
+- three process-message child proofs aggregated into one proof;
+- four tally child proofs aggregated into one proof.
+
+The 15 messages contain 13 valid votes and two invalid old-key votes. The
+expected raw tally is `[3, 6, 6, 8, 15]`.
+
+The concrete vote plan is deterministic:
+
+- old state 13 submits option 1 with weight 2 after deactivation; it is invalid;
+- old state 14 submits option 2 with weight 3 after deactivation and key
+  replacement; it is invalid;
+- states 0 through 11 each submit one valid vote, choosing `stateIndex % 5`
+  and weight `optionIndex + 1`;
+- replacement state 15 submits option 4 with weight 5;
+- state 12 submits no message.
+
+Run the complete child proving and aggregation suite in the background on the
+proving machine:
+
+```bash
+mkdir -p logs metrics sp1-proofs
+
+nohup env \
+  SP1_TARGET_DIR=/tmp/zkvm-amaci-sp1-target \
+  CARGO_TARGET_DIR=/tmp/zkvm-amaci-sp1-agg-target \
+  scripts/run_fifteen_signup_sp1_aggregation.sh \
+  > logs/fifteen-signup-aggregation-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+The script proves sequentially. Follow it with:
+
+```bash
+tail -f $(ls -t logs/fifteen-signup-aggregation-*.out | head -1)
+
+tail -f $(ls -t \
+  logs/sp1-compressed-fifteen-signup-*.log \
+  logs/sp1-aggregate-*.log 2>/dev/null | head -1)
+```
+
+Completion checks:
+
+```bash
+pgrep -af 'amaci-proof-sp1|sp1-prover'
+
+grep -n 'aggregate compressed verify ok' \
+  $(ls -t logs/sp1-aggregate-process-messages-*.log | head -1)
+
+grep -n 'aggregate compressed verify ok' \
+  $(ls -t logs/sp1-aggregate-tally-*.log | head -1)
+
+ls -lh sp1-proofs/fifteen-signup-aggregate-artifacts.tar.gz
+```
+
+The archive includes all nine non-aggregate child execute messages, both
+aggregate proof triplets, and both aggregate execute messages. The same
+proving run therefore supports aggregate and non-aggregate chain comparisons.
+Copy it to the local machine and extract it from the repository root:
+
+```bash
+tar -xzf sp1-proofs/fifteen-signup-aggregate-artifacts.tar.gz
+```
+
+The archive already contains the two aggregate CosmWasm messages. They can be
+rebuilt from the raw artifacts when needed:
+
+```bash
+scripts/make_cosmwasm_sp1_aggregate_msg.sh process-messages \
+  sp1-proofs/fifteen-signup-process-messages.aggregate \
+  > sp1-proofs/fifteen-signup-process-messages.aggregate.verify-compressed-aggregate.msg.json
+
+scripts/make_cosmwasm_sp1_aggregate_msg.sh tally \
+  sp1-proofs/fifteen-signup-tally.aggregate \
+  > sp1-proofs/fifteen-signup-tally.aggregate.verify-compressed-aggregate.msg.json
+```
+
+The local aggregate E2E manifest is
+`fixtures/round-e2e.fifteen-signup.aggregate.example.json`. The matching
+non-aggregate manifest is `fixtures/round-e2e.fifteen-signup.example.json`.
+
 ## Groth16 Wrapper
 
 Generate a Groth16-wrapped proof and verify the raw on-chain artifacts:

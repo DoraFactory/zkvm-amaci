@@ -147,3 +147,16 @@ The round plan remains:
 The aggregate execute path verifies one aggregate proof and advances the stage
 by the aggregate public output's `child_count`. For the five-signup fixture,
 `processMessages` has `child_count=1`, while `tally` has `child_count=2`.
+
+For the larger aggregation comparison, run:
+
+```bash
+node scripts/run_cosmwasm_round_e2e.mjs \
+  --manifest fixtures/round-e2e.fifteen-signup.aggregate.example.json
+```
+
+This round has three process-message children and four tally children. The
+contract verifies four transactions in total: one `processDeactivate`, one
+`addNewKey`, one process-message aggregate, and one tally aggregate. The
+non-aggregate baseline uses nine verifier transactions and is configured in
+`fixtures/round-e2e.fifteen-signup.example.json`.
