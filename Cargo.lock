@@ -212,6 +212,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "amaci-proof-sp1-tree-host"
+version = "0.1.0"
+dependencies = [
+ "amaci-proof-core",
+ "base64 0.22.1",
+ "bincode",
+ "serde",
+ "serde_json",
+ "sp1-build",
+ "sp1-sdk",
+ "sp1-verifier",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "amaci-proof-sp1-tree-program"
+version = "0.1.0"
+dependencies = [
+ "amaci-proof-core",
+ "sha2 0.10.9",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

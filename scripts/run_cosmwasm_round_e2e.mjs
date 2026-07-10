@@ -83,6 +83,15 @@ function feeForGas(gas, gasPricePeaka, denom) {
 }
 
 function wrapStageMessage(stage, verifyMsg) {
+  if (verifyMsg.verify_compressed_round_root) {
+    const { proof, public_values } = verifyMsg.verify_compressed_round_root;
+    return {
+      verify_compressed_round_root: {
+        proof,
+        public_values,
+      },
+    };
+  }
   if (verifyMsg.verify_compressed_aggregate) {
     const { proof, public_values, vkey_hash } = verifyMsg.verify_compressed_aggregate;
     return {
@@ -105,7 +114,46 @@ function wrapStageMessage(stage, verifyMsg) {
       },
     };
   }
-  throw new Error(`stage ${stage} msg must contain verify_compressed or verify_compressed_aggregate`);
+  throw new Error(
+    `stage ${stage} msg must contain verify_compressed, verify_compressed_aggregate, or verify_compressed_round_root`,
+  );
+}
+
+function readTreeVerifier(manifest, manifestDir) {
+  if (manifest.treeVerifier && manifest.treeVerifierPath) {
+    throw new Error("set only one of treeVerifier or treeVerifierPath");
+  }
+  if (manifest.treeVerifier) return manifest.treeVerifier;
+  if (manifest.treeVerifierPath) {
+    return readJson(resolveInputPath(manifestDir, manifest.treeVerifierPath));
+  }
+  return undefined;
+}
+
+function expandStageConfigs(manifest) {
+  const stages = [...(manifest.stages ?? [])];
+  for (const series of manifest.stageSeries ?? []) {
+    const count = Number(series.count);
+    const start = Number(series.start ?? 0);
+    if (!Number.isSafeInteger(count) || count <= 0 || !Number.isSafeInteger(start)) {
+      throw new Error("stageSeries count must be positive and start must be an integer");
+    }
+    if (!series.stage || !series.msgPathPattern?.includes("{index}")) {
+      throw new Error("stageSeries requires stage and msgPathPattern containing {index}");
+    }
+    for (let offset = 0; offset < count; offset += 1) {
+      const index = start + offset;
+      stages.push({
+        label: `${series.labelPrefix ?? series.stage}_${index}`,
+        stage: series.stage,
+        msgPath: series.msgPathPattern.replaceAll("{index}", index.toString()),
+        gas: series.gas,
+        memo: series.memoPrefix ? `${series.memoPrefix} ${index}` : undefined,
+      });
+    }
+  }
+  if (stages.length === 0) throw new Error("manifest contains no proof stages");
+  return stages;
 }
 
 function txSummary(label, result, costGasPricePeaka, extra = {}) {
@@ -174,6 +222,8 @@ async function main() {
     round_id: manifest.roundId ?? "zkvm-amaci-round-e2e",
     expected: manifest.expected,
   };
+  const treeVerifier = readTreeVerifier(manifest, manifestDir);
+  if (treeVerifier) instantiateMsg.tree_verifier = treeVerifier;
   const instantiateFee =
     manifest.instantiateGas === "auto" || manifest.instantiateGas === undefined
       ? "auto"
@@ -192,7 +242,7 @@ async function main() {
     }),
   );
 
-  for (const stageConfig of manifest.stages) {
+  for (const stageConfig of expandStageConfigs(manifest)) {
     const msgPath = resolveInputPath(manifestDir, stageConfig.msgPath);
     const verifyMsg = readJson(msgPath);
     const executeMsg = wrapStageMessage(stageConfig.stage, verifyMsg);
@@ -233,6 +283,8 @@ async function main() {
     costGasPricePeaka: costGasPricePeaka.toString(),
     totalCostPeaka: totalCostPeaka.toString(),
     totalCostDora: peakaToDora(totalCostPeaka),
+    scenario: manifest.scenario,
+    expectedRawResults: manifest.expectedRawResults,
     roundState: state,
     transactions: rows,
   };

@@ -5,6 +5,17 @@ use cosmwasm_std::Binary;
 pub struct InstantiateMsg {
     pub round_id: Option<String>,
     pub expected: RoundPlan,
+    #[serde(default)]
+    pub tree_verifier: Option<TreeVerifierConfig>,
+}
+
+#[cw_serde]
+pub struct TreeVerifierConfig {
+    pub tree_vkey_hash: Binary,
+    pub base_program_vkey_digest: Binary,
+    pub tree_program_vkey_digest: Binary,
+    pub expected_poll_id: Binary,
+    pub expected_coord_pub_key_hash: Binary,
 }
 
 #[cw_serde]
@@ -28,6 +39,10 @@ pub enum ExecuteMsg {
         proof: Binary,
         public_values: Binary,
         vkey_hash: Binary,
+    },
+    VerifyCompressedRoundRoot {
+        proof: Binary,
+        public_values: Binary,
     },
 }
 

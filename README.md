@@ -2,8 +2,9 @@
 
 Native zkVM implementation of the AMACI proof logic for RISC Zero and SP1.
 
-The codebase keeps one protocol backend only: SHA-256 based commitments, Ed25519
-command signatures, X25519 key agreement, and byte-oriented message encryption.
+The codebase keeps one protocol backend only: SHA-256 based commitments,
+ML-DSA-65 command signatures, ML-KEM-768 key establishment, and byte-oriented
+message encryption.
 Both zkVM hosts use the same `proof-core` execution logic and verify their
 public output against the host-side result before writing proof artifacts.
 
@@ -25,6 +26,8 @@ crates/
   proof-risc0-host/      RISC Zero prove/verify CLI.
   proof-sp1-program/     SP1 guest program entrypoint.
   proof-sp1-host/        SP1 prove/execute/verify CLI.
+  proof-sp1-tree-program/SP1 recursive tree guest with fixed fan-in 5.
+  proof-sp1-tree-host/   Streaming tree scheduler and final round-root CLI.
   cosmwasm-sp1-verifier/ CosmWasm verifier PoC for SP1 Groth16 and compressed proofs.
 configs/
   cargo-risc0-native-patches.toml
@@ -41,6 +44,10 @@ The CLIs accept these native fixtures:
 - `tally-votes-native-2-1-1`
 - `process-deactivate-native-2-5`
 - `add-new-key-native-2`
+- `fifty-signup-process-deactivate`
+- `fifty-signup-add-new-key`
+- `fifty-signup-process-messages-{0..9}`
+- `fifty-signup-tally-{0..10}`
 
 The default circuit for both RISC Zero and SP1 hosts is
 `process-messages-native-2-1-5-full`.
@@ -51,7 +58,14 @@ The default circuit for both RISC Zero and SP1 hosts is
 cargo test -p amaci-proof-core
 cargo check -p amaci-proof-risc0-host
 cargo check -p amaci-proof-sp1-host
+cargo check -p amaci-proof-sp1-tree-host
 ```
+
+Hierarchical SP1 aggregation and the one-proof CosmWasm round path are
+documented in [`docs/sp1_tree_aggregation.md`](docs/sp1_tree_aggregation.md).
+The larger `3-1-1-5` benchmark uses 50 signups, 50 messages and 51 final state
+leaves; its proving and E2E commands are in
+[`docs/fifty_signup_tree_e2e.md`](docs/fifty_signup_tree_e2e.md).
 
 Profile the shared protocol logic without proving:
 

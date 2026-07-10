@@ -325,3 +325,410 @@ processDeactivate + addNewKey + 1 processMessagesAggregate + 1 tallyAggregate = 
 - aggregate proof raw bytes；
 - 链上 verify gas；
 - 最终 round tally 是否仍为预期结果。
+
+## 13. 15 Signup / 15 Message 扩展测试（2026-07-10）
+
+第 12 节计划的更大规模测试已经完成。本轮仍使用单批容量为 5 的
+`2-1-1-5` 配置，但把初始 signup 和 vote message 都增加到 15，用于观察
+多个 `processMessages` 和多个 `tally` proof 聚合后的实际收益。
+
+测试结果：
+
+```text
+initial signups: 15
+final state leaves: 16
+vote messages: 15
+processMessages child proofs: 3
+tally child proofs: 4
+
+non-aggregate verifier tx: 9
+aggregate verifier tx: 4
+
+non-aggregate total cost: 1.866945880 DORA
+aggregate total cost: 0.850075730 DORA
+saved: 1.016870150 DORA
+```
+
+两条路径的 round 均完整结束，所有交易 `code = 0`。Aggregate 合约最终记录：
+
+```json
+{
+  "completed": {
+    "process_deactivate": 1,
+    "add_new_key": 1,
+    "process_messages": 3,
+    "tally": 4
+  },
+  "next_stage": null,
+  "is_complete": true,
+  "verified_proofs": 4
+}
+```
+
+## 14. 测试数据
+
+### 14.1 Signup 和 StateLeaf
+
+本轮先创建 15 个 signup，state index 为 `0..14`。随后执行一次
+`processDeactivate`，停用 state 13 和 state 14 的旧 key；`addNewKey` 为 state
+14 追加 replacement key，新 StateLeaf 位于 state 15。因此 tally 阶段处理的是
+16 个 StateLeaf：
+
+```text
+initial signup count: 15
+deactivated old states: 13, 14
+replacement state: 15
+final numSignUps: 16
+```
+
+对应 fixture 实现在
+[`round_fixture.rs`](../crates/proof-core/src/round_fixture.rs#L356)，导出工具是
+[`export_fifteen_signup_round.rs`](../crates/proof-core/src/bin/export_fifteen_signup_round.rs)。
+
+### 14.2 Vote message
+
+15 条 message 都是 vote command。具体安排如下：
+
+| Message 来源 | Vote option | Weight | 预期结果 | 原因 |
+| --- | ---: | ---: | --- | --- |
+| old state 13 | 1 | 2 | invalid | key 已在 deactivate 阶段停用 |
+| old state 14 | 2 | 3 | invalid | old key 已停用并完成 key replacement |
+| state 0..11 | `stateIndex % 5` | `optionIndex + 1` | valid | 每个 state 提交一条正常 vote |
+| replacement state 15 | 4 | 5 | valid | 使用 replacement key 投票 |
+| state 12 | - | - | 无 message | 本轮不投票 |
+
+有效 vote 共 13 条，两个旧 key 的 message 不会修改 state。预期原始 tally 是：
+
+```text
+option 0: 3
+option 1: 6
+option 2: 6
+option 3: 8
+option 4: 15
+
+expected raw tally: [3, 6, 6, 8, 15]
+```
+
+### 14.3 Batch 划分
+
+`processMessages` 每批处理 5 条 message，所以 15 条 message 产生 3 个 child
+proof：
+
+```text
+fifteen-signup-process-messages-0
+fifteen-signup-process-messages-1
+fifteen-signup-process-messages-2
+```
+
+`tally` 每批处理 5 个 StateLeaf。最终有 16 个 StateLeaf，因此产生 4 个 child
+proof，最后一批包含 1 个实际 StateLeaf和 4 个 padding leaf：
+
+```text
+fifteen-signup-tally-0  -> state 0..4
+fifteen-signup-tally-1  -> state 5..9
+fifteen-signup-tally-2  -> state 10..14
+fifteen-signup-tally-3  -> state 15 + padding
+```
+
+## 15. 高性能机器 Proving 流程
+
+高性能机器负责生成 9 个普通 compressed proof，然后生成两个 aggregate
+proof。脚本入口是
+[`run_fifteen_signup_sp1_aggregation.sh`](../scripts/run_fifteen_signup_sp1_aggregation.sh)。
+
+执行命令：
+
+```bash
+mkdir -p logs metrics sp1-proofs
+
+nohup env \
+  SP1_TARGET_DIR=/tmp/zkvm-amaci-sp1-target \
+  CARGO_TARGET_DIR=/tmp/zkvm-amaci-sp1-agg-target \
+  scripts/run_fifteen_signup_sp1_aggregation.sh \
+  > logs/fifteen-signup-aggregation-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+脚本按顺序执行以下工作：
+
+1. 生成 `processDeactivate` 和 `addNewKey` compressed proof。
+2. 生成 3 个 `processMessages` compressed child proof。
+3. 生成 4 个 `tally` compressed child proof。
+4. 聚合 3 个 `processMessages` child proof。
+5. 聚合 4 个 `tally` child proof。
+6. 生成 CosmWasm execute msg 并打包 artifacts。
+
+所有 proving job 串行执行，没有同时启动多个 SP1 prover。
+
+### 15.1 Aggregation 连续性检查
+
+`processMessages` aggregation 检查：
+
+```text
+child[i].batchEndHash == child[i + 1].batchStartHash
+child[i].newStateCommitment == child[i + 1].currentStateCommitment
+```
+
+它还要求所有 child 的 `packedVals`、coordinator key hash、deactivate commitment
+和 poll id 相同。
+
+`tally` aggregation 检查：
+
+```text
+batch number: 0 -> 1 -> 2 -> 3
+child[i].newTallyCommitment == child[i + 1].currentTallyCommitment
+```
+
+所有 tally child 还必须使用同一个 state commitment。相关检查在
+[`aggregate.rs`](../crates/proof-core/src/aggregate.rs) 中实现。
+
+### 15.2 Artifacts
+
+高性能机器生成的压缩包：
+
+```text
+sp1-proofs/fifteen-signup-aggregate-artifacts.tar.gz
+```
+
+本地文件大小约 `11 MB`，SHA-256：
+
+```text
+62caf1b33d8357106d16dbc5fa37c3cd938f7e86f098deffc3d2be95c527345b
+```
+
+两个 aggregate proof 的链上输入：
+
+| Artifact | Bytes |
+| --- | ---: |
+| `fifteen-signup-process-messages.aggregate.sp1-compressed-proof.bytes` | 1,272,546 |
+| `fifteen-signup-process-messages.aggregate.public.bin` | 301 |
+| `fifteen-signup-process-messages.aggregate.vkey.bin` | 32 |
+| `fifteen-signup-tally.aggregate.sp1-compressed-proof.bytes` | 1,272,546 |
+| `fifteen-signup-tally.aggregate.public.bin` | 149 |
+| `fifteen-signup-tally.aggregate.vkey.bin` | 32 |
+
+压缩包还包含 9 个 non-aggregate execute msg 和两个 aggregate execute msg，
+因此同一批 proof 可以跑 aggregate 与 non-aggregate 两条链上路径。
+
+这次下载的压缩包没有包含高性能机器上的 `logs/` 和 `metrics/`，因此本节只记录
+可复核的 artifact 大小，没有填写 15-signup aggregation 的 proving 时间和峰值
+内存。后续需要比较树形聚合时，应把对应 metrics 文件一并带回。
+
+## 16. 本地准备与执行
+
+压缩包从高性能机器下载后放入 `zkvm-amaci`，从仓库根目录解压：
+
+```bash
+tar -xzf fifteen-signup-aggregate-artifacts.tar.gz
+```
+
+解压后，两份 aggregate execute msg 与 raw proof/public/vkey 重新生成的内容一致：
+
+```text
+process_messages_aggregate_msg=ok
+tally_aggregate_msg=ok
+```
+
+本轮使用的 manifest：
+
+| 路径 | Manifest |
+| --- | --- |
+| Aggregate | [`round-e2e.fifteen-signup.aggregate.example.json`](../fixtures/round-e2e.fifteen-signup.aggregate.example.json) |
+| Non-aggregate | [`round-e2e.fifteen-signup.example.json`](../fixtures/round-e2e.fifteen-signup.example.json) |
+
+Aggregate E2E：
+
+```bash
+node scripts/run_cosmwasm_round_e2e.mjs \
+  --manifest fixtures/round-e2e.fifteen-signup.aggregate.example.json
+```
+
+Non-aggregate E2E：
+
+```bash
+node scripts/run_cosmwasm_round_e2e.mjs \
+  --manifest fixtures/round-e2e.fifteen-signup.example.json
+```
+
+本地链参数：
+
+```text
+RPC: http://127.0.0.1:26657
+chain ID: zkvm-amaci-devnet
+denom: peaka
+signer: dora1y3uljxavztyw7tvlj3agacaja9scj5x0pkk5ml
+cost gas price: 10000000000 peaka/gas
+```
+
+本地 devnet 的 `signGasPricePeaka` 是 0，所以交易实际 fee 显示为 0。下文 DORA
+金额按 `10000000000 peaka/gas` 计算，用于估算相同 gas 在目标费率下的成本。
+
+## 17. 15-Signup Aggregate 链上结果
+
+结果文件：
+
+```text
+round-e2e-results/20260710053854/summary.json
+round-e2e-results/20260710053854/summary.md
+```
+
+部署结果：
+
+```text
+code ID: 8
+contract: dora1vguuxez2h5ekltfj9gjd62fs5k4rl2zy5hfrncasykzw08rezpfs7p9cxm
+round ID: fifteen-signup-15-message-2-1-1-5-aggregate
+```
+
+交易明细：
+
+| 步骤 | 高度 | Gas wanted | Gas used | 估算 DORA | 交易哈希 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| store_code | 68515 | 3,855,369 | 3,506,491 | 0.035064910 | `630940AEC9865F7FE41F0CBAC47F723898B439AE40D01B836684ED9D184D6C0B` |
+| instantiate_round | 68516 | 200,045 | 144,493 | 0.001444930 | `86B948509BE613DDD8990FFA522E199DCF62D7C16ED10A753FCBE44BD7CEEE83` |
+| process_deactivate | 68517 | 300,000,000 | 20,339,517 | 0.203395170 | `2AEE53061BE3A179700C1FFD16B5BF174156C32DD2E24AB286DBDDE61E213053` |
+| add_new_key | 68518 | 300,000,000 | 20,339,831 | 0.203398310 | `7953E7C32EDDCB4525C3059D2E65A7A1C6E2226D7E5F9AC57FAB87D997E54FD0` |
+| process_messages_aggregate | 68519 | 300,000,000 | 20,339,777 | 0.203397770 | `721A2EA139207E67340D3C2EBABF862AB9D91D2B1CF816FD14F1ED5DDBB49126` |
+| tally_aggregate | 68520 | 300,000,000 | 20,337,464 | 0.203374640 | `0BD38B0D3CC4AC59B723AD6066E7730ED5FCAAA09B3E9624D79651D36377EC16` |
+
+只计算 4 个 proof verify：
+
+```text
+gas: 81,356,589
+estimated cost: 0.813565890 DORA
+```
+
+包含 store code 和 instantiate：
+
+```text
+total gas: 85,007,573
+estimated total cost: 0.850075730 DORA
+```
+
+合约最终状态：
+
+```json
+{
+  "round_id": "fifteen-signup-15-message-2-1-1-5-aggregate",
+  "expected": {
+    "process_deactivate": 1,
+    "add_new_key": 1,
+    "process_messages": 3,
+    "tally": 4
+  },
+  "completed": {
+    "process_deactivate": 1,
+    "add_new_key": 1,
+    "process_messages": 3,
+    "tally": 4
+  },
+  "next_stage": null,
+  "is_complete": true,
+  "verified_proofs": 4
+}
+```
+
+## 18. 15-Signup Non-Aggregate 基准
+
+结果文件：
+
+```text
+round-e2e-results/20260710054137/summary.json
+round-e2e-results/20260710054137/summary.md
+```
+
+部署结果：
+
+```text
+code ID: 10
+contract: dora13we0myxwzlpx8l5ark8elw5gj5d59dl6cjkzmt80c5q5cv5rt54qlfsrhc
+round ID: fifteen-signup-15-message-2-1-1-5
+```
+
+交易明细：
+
+| 步骤 | 高度 | Gas wanted | Gas used | 估算 DORA | 交易哈希 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| store_code | 68547 | 3,855,369 | 3,506,491 | 0.035064910 | `9402543EBD11CFEAF4EA59563FBCD473C46FDDE485114D63F87618361D51C8F7` |
+| instantiate_round | 68548 | 198,487 | 143,380 | 0.001433800 | `E944258153C3D35E99ABD0767309CC58456FE9889D3E5D18CB4014AA7C3C6A1E` |
+| process_deactivate | 68549 | 300,000,000 | 20,339,171 | 0.203391710 | `8EB10C5961C435F974F81D2C66B50B80A45D1AEFFA82B00897621C75627CB2EB` |
+| add_new_key | 68550 | 300,000,000 | 20,339,486 | 0.203394860 | `634B77536C0721FEE470DA19A3723EEAF7F0F6F5C089D02699D8B0C642D6188E` |
+| process_messages_0 | 68551 | 300,000,000 | 20,339,151 | 0.203391510 | `2DF556D0027C7AE5898AE5D58D4EFAF58A97AF15A5FB183F27D7D4EAD3C98D6F` |
+| process_messages_1 | 68552 | 300,000,000 | 20,339,115 | 0.203391150 | `8EC92DA780D9CC1192692EE8EF55E8D7A8C879161D095341BCDFE99A091DB0FB` |
+| process_messages_2 | 68553 | 300,000,000 | 20,339,147 | 0.203391470 | `4767DB15103033E798831049C5A1B9A7981205CCBF19C23FCDD53A7B87B91EB0` |
+| tally_0 | 68554 | 300,000,000 | 20,337,176 | 0.203371760 | `4392184E55583C1BD288DEA482DF0A4E609C2800031897F8154ECCC25A565ADF` |
+| tally_1 | 68555 | 300,000,000 | 20,337,134 | 0.203371340 | `92BB8E7EF52189FF90F3D9727B92BA5B152FACE0D0BED7858410BC1E0E983037` |
+| tally_2 | 68556 | 300,000,000 | 20,337,172 | 0.203371720 | `D7A2B721366C01AC7B523900B5ABC9EEEFC8C5CDB2AC7751C7A233F40BC2D934` |
+| tally_3 | 68557 | 300,000,000 | 20,337,165 | 0.203371650 | `5B76B1C8D7E1648204468169C838EF61039EAFE65C616FA85C61BCBB1A20790B` |
+
+只计算 9 个 proof verify：
+
+```text
+gas: 183,044,717
+estimated cost: 1.830447170 DORA
+```
+
+包含 store code 和 instantiate：
+
+```text
+total gas: 186,694,588
+estimated total cost: 1.866945880 DORA
+```
+
+最终状态中的 `completed` 与 aggregate 路径相同，区别是
+`verified_proofs = 9`。
+
+## 19. 15-Signup Aggregate vs Non-Aggregate
+
+| 指标 | Non-aggregate | Aggregate | 节省 |
+| --- | ---: | ---: | ---: |
+| 链上 proof verify 交易数 | 9 | 4 | 5 |
+| `processMessages` verifier 调用 | 3 | 1 | 2 |
+| `tally` verifier 调用 | 4 | 1 | 3 |
+| proof verify gas | 183,044,717 | 81,356,589 | 101,688,128 |
+| proof verify 估算 DORA | 1.830447170 | 0.813565890 | 1.016881280 |
+| proof verify gas 降幅 | - | - | 55.554% |
+| 总 gas | 186,694,588 | 85,007,573 | 101,687,015 |
+| 总估算 DORA | 1.866945880 | 0.850075730 | 1.016870150 |
+| 总成本降幅 | - | - | 54.467% |
+
+单次 compressed proof 和单次 aggregate compressed proof 的链上 gas 都在约
+`20.34M`。本轮节省来自 verifier 调用次数从 9 次降到 4 次，而不是单次
+aggregate proof 验证变便宜。
+
+`processDeactivate` 和 `addNewKey` 各自只有一个 proof，没有参与聚合。实际减少的
+5 次调用来自：
+
+```text
+3 processMessages -> 1 processMessagesAggregate  (减少 2 次)
+4 tally           -> 1 tallyAggregate            (减少 3 次)
+```
+
+## 20. Tally 正确性
+
+Rust 测试
+[`fifteen_signup_round_fixture_executes_and_links_aggregated_batches`](../crates/proof-core/tests/core_smoke.rs#L322)
+执行全部 9 个 stage input，并检查：
+
+- 15 条 message 中有 13 条有效、2 条无效；
+- 三个 `processMessages` batch 的 message hash 与 state commitment 连续；
+- 四个 `tally` batch 的 batch number 与 tally commitment 连续；
+- 最后一个 `processMessages` state commitment 等于第一个 `tally` state commitment；
+- 汇总后的原始结果等于 `[3, 6, 6, 8, 15]`；
+- aggregate public output 的 child count 分别是 3 和 4。
+
+链上合约不会直接显示原始 tally 数组。它验证 SP1 proof，并依据已验证的 aggregate
+public output 推进 round。原始 tally 的正确性由 Rust guest 执行、child proof、
+aggregate proof 和链上 verifier 串起来保证；合约最终的 `is_complete = true` 表明
+两组 aggregate proof 都已验证并完成对应阶段。
+
+## 21. 本轮结论和后续边界
+
+15-signup 测试补上了 five-signup 测试缺少的多 child 场景。三个
+`processMessages` child 和四个 `tally` child 都已完成聚合，链上总成本下降
+`54.467%`。
+
+当前实现仍是扁平聚合：一个 aggregation job 同时加载同一阶段的全部 child
+proof。child 数继续增加时，aggregate proving 的内存和时间也会增长。大规模
+round 应改用固定 fan-in 的树形聚合，例如每 4 或 5 个 proof 聚合一组，再聚合
+上一层输出。最终链上仍只验证一个 stage aggregate proof，但单个 prover job 的
+输入规模可以保持稳定。

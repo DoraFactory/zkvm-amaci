@@ -192,9 +192,10 @@ CARGO_TARGET_DIR=/tmp/zkvm-amaci-sp1-agg-target \
   --public sp1-proofs/five-signup-process-messages.aggregate.verified-public.json
 ```
 
-## Next Steps
+## Hierarchical Successor
 
-After both aggregate paths are measured, the next step is deciding whether the
-CosmWasm round contract should accept aggregate proofs directly for repeated
-operator stages, or whether to keep accepting child proofs and add aggregate
-verification as a separate optional path first.
+The flat aggregate path remains useful as a comparison baseline. Large rounds
+should use the fixed-fan-in recursive scheduler in
+`docs/sp1_tree_aggregation.md`: it groups at most five proofs per node, repeats
+the grouping across levels, and combines both stage roots with
+`processDeactivate` and `addNewKey` into one final proof for CosmWasm.

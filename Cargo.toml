@@ -8,6 +8,8 @@ members = [
     "crates/proof-sp1-program",
     "crates/proof-sp1-aggregate-host",
     "crates/proof-sp1-aggregate-program",
+    "crates/proof-sp1-tree-host",
+    "crates/proof-sp1-tree-program",
     "crates/proof-sp1-crypto-profile-host",
     "crates/proof-sp1-crypto-profile-program",
     "crates/cosmwasm-sp1-verifier",

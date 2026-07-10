@@ -41,7 +41,7 @@ pub fn built_in_input(name: &str) -> ProofResult<Option<ProverInput>> {
 }
 
 pub fn supported_inputs() -> &'static str {
-    "process-messages-native-1-1, process-messages-native-2-1-5, process-messages-native-2-1-5-full, tally-votes-native-2-1-1, process-deactivate-native-2-5, add-new-key-native-2, five-signup-process-deactivate, five-signup-add-new-key, five-signup-process-messages-full, five-signup-tally-0, five-signup-tally-1, fifteen-signup-process-deactivate, fifteen-signup-add-new-key, fifteen-signup-process-messages-0, fifteen-signup-process-messages-1, fifteen-signup-process-messages-2, fifteen-signup-tally-0, fifteen-signup-tally-1, fifteen-signup-tally-2, fifteen-signup-tally-3"
+    "process-messages-native-1-1, process-messages-native-2-1-5, process-messages-native-2-1-5-full, tally-votes-native-2-1-1, process-deactivate-native-2-5, add-new-key-native-2, five-signup-*, fifteen-signup-*, fifty-signup-process-deactivate, fifty-signup-add-new-key, fifty-signup-process-messages-{0..9}, fifty-signup-tally-{0..10}"
 }
 
 pub fn process_messages_native_1_1() -> ProofResult<ProcessMessagesInput> {

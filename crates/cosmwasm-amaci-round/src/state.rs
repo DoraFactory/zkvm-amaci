@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cw_storage_plus::Item;
 
-use crate::msg::{RoundPlan, RoundStage};
+use crate::msg::{RoundPlan, RoundStage, TreeVerifierConfig};
 
 pub const ROUND_STATE: Item<StoredRoundState> = Item::new("round_state");
 
@@ -11,6 +11,8 @@ pub struct StoredRoundState {
     pub expected: RoundPlan,
     pub completed: RoundPlan,
     pub verified_proofs: u32,
+    #[serde(default)]
+    pub tree_verifier: Option<TreeVerifierConfig>,
 }
 
 impl StoredRoundState {

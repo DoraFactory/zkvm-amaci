@@ -21,7 +21,9 @@ use amaci_proof_core::packing::{
     unpack_process_messages_packed_vals, unpack_tally_packed_vals,
 };
 use amaci_proof_core::public_output::public_value;
-use amaci_proof_core::round_fixture::{fifteen_signup_round_fixture, five_signup_round_fixture};
+use amaci_proof_core::round_fixture::{
+    fifteen_signup_round_fixture, fifty_signup_round_fixture, five_signup_round_fixture,
+};
 use amaci_proof_core::{execute_proof_logic, Field, ProverInput, PublicOutput};
 use num_traits::{One, ToPrimitive};
 
@@ -389,6 +391,91 @@ fn fifteen_signup_round_fixture_executes_and_links_aggregated_batches() {
     };
     let PublicOutput::TallyVotes(first_tally) = &outputs[5] else {
         panic!("stage 5 must be tally");
+    };
+    assert_eq!(
+        final_messages.new_state_commitment,
+        first_tally.state_commitment
+    );
+
+    let mut final_raw_results = [0u128; 5];
+    for stage in &fixture.stages {
+        let ProverInput::TallyVotes(input) = &stage.input else {
+            continue;
+        };
+        for vote_row in &input.votes {
+            for (idx, vote) in vote_row.iter().enumerate() {
+                final_raw_results[idx] += vote.to_u128().expect("fixture vote fits in u128");
+            }
+        }
+    }
+    assert_eq!(final_raw_results, fixture.expected_raw_results);
+}
+
+#[test]
+fn fifty_signup_round_fixture_executes_depth_three_batches() {
+    let fixture = fifty_signup_round_fixture().unwrap();
+    assert_eq!(fixture.state_tree_depth, 3);
+    assert_eq!(fixture.initial_signups, 50);
+    assert_eq!(fixture.final_signups, 51);
+    assert_eq!(fixture.message_count, 50);
+    assert_eq!(fixture.deactivate_state_indices, vec![48, 49]);
+    assert_eq!(fixture.add_new_key_new_state_index, 50);
+    assert_eq!(
+        fixture
+            .votes
+            .iter()
+            .filter(|vote| vote.expected_valid)
+            .count(),
+        48
+    );
+    assert_eq!(fixture.expected_raw_results, [10, 20, 27, 36, 50]);
+    assert_eq!(fixture.stages.len(), 23);
+
+    for stage in &fixture.stages {
+        assert_eq!(
+            decode_input(&encode_input(&stage.input)).unwrap(),
+            stage.input
+        );
+    }
+    for name in [
+        "fifty-signup-process-deactivate",
+        "fifty-signup-add-new-key",
+        "fifty-signup-process-messages-9",
+        "fifty-signup-tally-10",
+    ] {
+        assert!(amaci_proof_core::sample_inputs::built_in_input(name)
+            .unwrap()
+            .is_some());
+    }
+
+    let outputs = fixture
+        .stages
+        .iter()
+        .map(|stage| execute_proof_logic(&stage.input).unwrap())
+        .collect::<Vec<_>>();
+    let encoded_outputs = outputs.iter().map(encode_public_output).collect::<Vec<_>>();
+
+    let PublicOutput::ProcessDeactivate(deactivate) = &outputs[0] else {
+        panic!("stage 0 must be process deactivate");
+    };
+    let PublicOutput::AddNewKey(add_key) = &outputs[1] else {
+        panic!("stage 1 must be add new key");
+    };
+    assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
+
+    let process_aggregate =
+        build_process_messages_aggregate_public_output(&encoded_outputs[2..12]).unwrap();
+    assert_eq!(process_aggregate.child_count, 10);
+    let tally_aggregate = build_tally_aggregate_public_output(&encoded_outputs[12..23]).unwrap();
+    assert_eq!(tally_aggregate.child_count, 11);
+    assert_eq!(tally_aggregate.first_batch_num, 0);
+    assert_eq!(tally_aggregate.last_batch_num, 10);
+
+    let PublicOutput::ProcessMessages(final_messages) = &outputs[11] else {
+        panic!("stage 11 must be process messages");
+    };
+    let PublicOutput::TallyVotes(first_tally) = &outputs[12] else {
+        panic!("stage 12 must be tally");
     };
     assert_eq!(
         final_messages.new_state_commitment,

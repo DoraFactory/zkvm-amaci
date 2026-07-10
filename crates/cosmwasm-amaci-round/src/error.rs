@@ -37,4 +37,22 @@ pub enum ContractError {
 
     #[error("round plan must include at least one proof stage")]
     EmptyRoundPlan,
+
+    #[error("tree verifier config field {field} must be 32 bytes, got {actual}")]
+    InvalidTreeVerifierConfig { field: String, actual: usize },
+
+    #[error("tree verifier config was not set at instantiate time")]
+    MissingTreeVerifierConfig,
+
+    #[error("tree round root cannot be submitted after round progress has started")]
+    RoundAlreadyStarted,
+
+    #[error("invalid tree round-root public output: {reason}")]
+    InvalidRoundRootPublicOutput { reason: String },
+
+    #[error("tree round-root plan mismatch: {reason}")]
+    RoundRootPlanMismatch { reason: String },
+
+    #[error("tree round-root identity mismatch: {field}")]
+    RoundRootIdentityMismatch { field: String },
 }

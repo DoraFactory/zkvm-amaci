@@ -10,6 +10,7 @@
     "build:round-contract": "PACKAGE=amaci-cosmwasm-round WASM_BASENAME=amaci_cosmwasm_round scripts/build_cosmwasm_contract.sh",
     "fixture:five-signup": "cargo run -q -p amaci-proof-core --bin export_five_signup_round -- fixtures/five-signup-round",
     "fixture:fifteen-signup": "cargo run -q -p amaci-proof-core --bin export_fifteen_signup_round -- fixtures/fifteen-signup-round",
+    "fixture:fifty-signup": "cargo run -q -p amaci-proof-core --bin export_fifty_signup_round -- fixtures/fifty-signup-round",
     "round:e2e:local": "node scripts/run_cosmwasm_round_e2e.mjs --manifest fixtures/round-e2e.local.example.json"
   },
   "repository": {

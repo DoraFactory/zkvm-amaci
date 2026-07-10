@@ -4,7 +4,9 @@ use cosmwasm_std::{
 use sp1_verifier::compressed::SP1CompressedVerifierRaw;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, RoundStage, RoundStateResponse};
+use crate::msg::{
+    ExecuteMsg, InstantiateMsg, QueryMsg, RoundStage, RoundStateResponse, TreeVerifierConfig,
+};
 use crate::state::{empty_completed_plan, plan_total, StoredRoundState, ROUND_STATE};
 
 const AGGREGATE_MAGIC: &[u8; 8] = b"AMACIAG1";
@@ -12,6 +14,9 @@ const AGGREGATE_TAG_PROCESS_MESSAGES: u8 = 1;
 const AGGREGATE_TAG_TALLY: u8 = 2;
 const PROCESS_MESSAGES_AGGREGATE_PUBLIC_LEN: usize = 8 + 1 + 4 + 9 * 32;
 const TALLY_AGGREGATE_PUBLIC_LEN: usize = 8 + 1 + 4 + 2 * 4 + 4 * 32;
+const TREE_AGGREGATE_MAGIC: &[u8; 8] = b"AMACITR2";
+const TREE_TAG_ROUND_ROOT: u8 = 3;
+const TREE_ROUND_ROOT_PUBLIC_LEN: usize = 8 + 1 + 6 * 4 + 2 * 32 + 13 * 32;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -23,6 +28,9 @@ pub fn instantiate(
     if plan_total(&msg.expected) == 0 {
         return Err(ContractError::EmptyRoundPlan);
     }
+    if let Some(config) = &msg.tree_verifier {
+        validate_tree_verifier_config(config)?;
+    }
 
     let round_id = msg
         .round_id
@@ -32,6 +40,7 @@ pub fn instantiate(
         expected: msg.expected,
         completed: empty_completed_plan(),
         verified_proofs: 0,
+        tree_verifier: msg.tree_verifier,
     };
     ROUND_STATE.save(deps.storage, &state)?;
 
@@ -63,7 +72,108 @@ pub fn execute(
         } => {
             execute_verify_compressed_aggregate_stage(deps, stage, proof, public_values, vkey_hash)
         }
+        ExecuteMsg::VerifyCompressedRoundRoot {
+            proof,
+            public_values,
+        } => execute_verify_compressed_round_root(deps, proof, public_values),
     }
+}
+
+fn execute_verify_compressed_round_root(
+    deps: DepsMut,
+    proof: Binary,
+    public_values: Binary,
+) -> Result<Response, ContractError> {
+    let mut state = ROUND_STATE.load(deps.storage)?;
+    if plan_total(&state.completed) != 0 || state.verified_proofs != 0 {
+        return Err(ContractError::RoundAlreadyStarted);
+    }
+    let config = state
+        .tree_verifier
+        .as_ref()
+        .ok_or(ContractError::MissingTreeVerifierConfig)?;
+    let root = decode_round_root_public_output(&public_values)?;
+
+    if state.expected.process_deactivate != 1 || state.expected.add_new_key != 1 {
+        return Err(ContractError::RoundRootPlanMismatch {
+            reason:
+                "round-root mode requires exactly one process-deactivate and one add-new-key proof"
+                    .to_string(),
+        });
+    }
+    if root.direct_child_count != 4 {
+        return Err(ContractError::RoundRootPlanMismatch {
+            reason: format!(
+                "expected 4 direct round children, got {}",
+                root.direct_child_count
+            ),
+        });
+    }
+    if root.process_messages_leaf_count != state.expected.process_messages {
+        return Err(ContractError::RoundRootPlanMismatch {
+            reason: format!(
+                "process-messages leaf count {}, expected {}",
+                root.process_messages_leaf_count, state.expected.process_messages
+            ),
+        });
+    }
+    if root.tally_leaf_count != state.expected.tally {
+        return Err(ContractError::RoundRootPlanMismatch {
+            reason: format!(
+                "tally leaf count {}, expected {}",
+                root.tally_leaf_count, state.expected.tally
+            ),
+        });
+    }
+    if root.total_leaf_count != plan_total(&state.expected) {
+        return Err(ContractError::RoundRootPlanMismatch {
+            reason: format!(
+                "total leaf count {}, expected {}",
+                root.total_leaf_count,
+                plan_total(&state.expected)
+            ),
+        });
+    }
+
+    require_identity(
+        "base_program_vkey_digest",
+        &root.base_program_vkey_digest,
+        &config.base_program_vkey_digest,
+    )?;
+    require_identity(
+        "tree_program_vkey_digest",
+        &root.tree_program_vkey_digest,
+        &config.tree_program_vkey_digest,
+    )?;
+    require_identity(
+        "expected_poll_id",
+        &root.expected_poll_id,
+        &config.expected_poll_id,
+    )?;
+    require_identity(
+        "expected_coord_pub_key_hash",
+        &root.coord_pub_key_hash,
+        &config.expected_coord_pub_key_hash,
+    )?;
+
+    verify_sp1_compressed(&proof, &public_values, &config.tree_vkey_hash)?;
+    state.completed = state.expected.clone();
+    state.verified_proofs += 1;
+    ROUND_STATE.save(deps.storage, &state)?;
+
+    Ok(Response::new()
+        .add_attribute("method", "verify_compressed_round_root")
+        .add_attribute("backend", "sp1")
+        .add_attribute("proof_mode", "compressed_tree_round_root")
+        .add_attribute("round_id", state.round_id)
+        .add_attribute(
+            "process_messages_leaf_count",
+            root.process_messages_leaf_count.to_string(),
+        )
+        .add_attribute("tally_leaf_count", root.tally_leaf_count.to_string())
+        .add_attribute("total_leaf_count", root.total_leaf_count.to_string())
+        .add_attribute("verified_proofs", state.verified_proofs.to_string())
+        .add_attribute("is_complete", "true"))
 }
 
 fn execute_verify_compressed_stage(
@@ -236,6 +346,113 @@ fn decode_aggregate_public_output(bytes: &[u8]) -> Result<AggregatePublicSummary
     Ok(AggregatePublicSummary { stage, child_count })
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct RoundRootPublicSummary {
+    direct_child_count: u32,
+    total_leaf_count: u32,
+    process_messages_leaf_count: u32,
+    tally_leaf_count: u32,
+    base_program_vkey_digest: [u8; 32],
+    tree_program_vkey_digest: [u8; 32],
+    coord_pub_key_hash: [u8; 32],
+    expected_poll_id: [u8; 32],
+}
+
+fn decode_round_root_public_output(bytes: &[u8]) -> Result<RoundRootPublicSummary, ContractError> {
+    if bytes.len() != TREE_ROUND_ROOT_PUBLIC_LEN {
+        return Err(ContractError::InvalidRoundRootPublicOutput {
+            reason: format!(
+                "invalid length {}, expected {TREE_ROUND_ROOT_PUBLIC_LEN}",
+                bytes.len()
+            ),
+        });
+    }
+    if &bytes[..TREE_AGGREGATE_MAGIC.len()] != TREE_AGGREGATE_MAGIC {
+        return Err(ContractError::InvalidRoundRootPublicOutput {
+            reason: "invalid magic".to_string(),
+        });
+    }
+    if bytes[TREE_AGGREGATE_MAGIC.len()] != TREE_TAG_ROUND_ROOT {
+        return Err(ContractError::InvalidRoundRootPublicOutput {
+            reason: format!(
+                "invalid tag {}, expected {TREE_TAG_ROUND_ROOT}",
+                bytes[TREE_AGGREGATE_MAGIC.len()]
+            ),
+        });
+    }
+
+    let mut offset = TREE_AGGREGATE_MAGIC.len() + 1;
+    let direct_child_count = read_u32(bytes, &mut offset);
+    let total_leaf_count = read_u32(bytes, &mut offset);
+    let process_messages_leaf_count = read_u32(bytes, &mut offset);
+    let tally_leaf_count = read_u32(bytes, &mut offset);
+    let _process_messages_level = read_u32(bytes, &mut offset);
+    let _tally_level = read_u32(bytes, &mut offset);
+    let base_program_vkey_digest = read_digest(bytes, &mut offset);
+    let tree_program_vkey_digest = read_digest(bytes, &mut offset);
+    let coord_pub_key_hash = read_digest(bytes, &mut offset);
+    let expected_poll_id = read_digest(bytes, &mut offset);
+
+    Ok(RoundRootPublicSummary {
+        direct_child_count,
+        total_leaf_count,
+        process_messages_leaf_count,
+        tally_leaf_count,
+        base_program_vkey_digest,
+        tree_program_vkey_digest,
+        coord_pub_key_hash,
+        expected_poll_id,
+    })
+}
+
+fn read_u32(bytes: &[u8], offset: &mut usize) -> u32 {
+    let value = u32::from_be_bytes(
+        bytes[*offset..*offset + 4]
+            .try_into()
+            .expect("round-root length was validated"),
+    );
+    *offset += 4;
+    value
+}
+
+fn read_digest(bytes: &[u8], offset: &mut usize) -> [u8; 32] {
+    let value = bytes[*offset..*offset + 32]
+        .try_into()
+        .expect("round-root length was validated");
+    *offset += 32;
+    value
+}
+
+fn validate_tree_verifier_config(config: &TreeVerifierConfig) -> Result<(), ContractError> {
+    for (field, value) in [
+        ("tree_vkey_hash", &config.tree_vkey_hash),
+        ("base_program_vkey_digest", &config.base_program_vkey_digest),
+        ("tree_program_vkey_digest", &config.tree_program_vkey_digest),
+        ("expected_poll_id", &config.expected_poll_id),
+        (
+            "expected_coord_pub_key_hash",
+            &config.expected_coord_pub_key_hash,
+        ),
+    ] {
+        if value.len() != 32 {
+            return Err(ContractError::InvalidTreeVerifierConfig {
+                field: field.to_string(),
+                actual: value.len(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn require_identity(field: &str, actual: &[u8; 32], expected: &[u8]) -> Result<(), ContractError> {
+    if actual.as_slice() != expected {
+        return Err(ContractError::RoundRootIdentityMismatch {
+            field: field.to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -280,6 +497,7 @@ mod tests {
             InstantiateMsg {
                 round_id: Some("round-1".to_string()),
                 expected: plan(),
+                tree_verifier: None,
             },
         )
         .unwrap();
@@ -306,6 +524,7 @@ mod tests {
                     process_messages: 0,
                     tally: 0,
                 },
+                tree_verifier: None,
             },
         )
         .unwrap_err();
@@ -322,6 +541,7 @@ mod tests {
             InstantiateMsg {
                 round_id: None,
                 expected: plan(),
+                tree_verifier: None,
             },
         )
         .unwrap();
@@ -352,6 +572,7 @@ mod tests {
             InstantiateMsg {
                 round_id: None,
                 expected: plan(),
+                tree_verifier: None,
             },
         )
         .unwrap();
@@ -382,6 +603,7 @@ mod tests {
             InstantiateMsg {
                 round_id: None,
                 expected: plan(),
+                tree_verifier: None,
             },
         )
         .unwrap();
@@ -422,6 +644,7 @@ mod tests {
                     process_messages: 1,
                     tally: 1,
                 },
+                tree_verifier: None,
             },
         )
         .unwrap();
@@ -457,6 +680,7 @@ mod tests {
                     process_messages: 1,
                     tally: 0,
                 },
+                tree_verifier: None,
             },
         )
         .unwrap();
@@ -499,6 +723,192 @@ mod tests {
             out.extend_from_slice(&0u32.to_be_bytes());
         }
         out.resize(out.len() + digest_count * 32, 0u8);
+        Binary::from(out)
+    }
+
+    #[test]
+    fn invalid_tree_verifier_config_is_rejected_at_instantiate() {
+        let mut deps = mock_dependencies();
+        let mut config = tree_verifier_config(7);
+        config.tree_vkey_hash = Binary::from(vec![7u8; 31]);
+        let err = instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            InstantiateMsg {
+                round_id: None,
+                expected: plan(),
+                tree_verifier: Some(config),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ContractError::InvalidTreeVerifierConfig { actual: 31, .. }
+        ));
+    }
+
+    #[test]
+    fn round_root_requires_pinned_verifier_config() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            InstantiateMsg {
+                round_id: None,
+                expected: plan(),
+                tree_verifier: None,
+            },
+        )
+        .unwrap();
+
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            ExecuteMsg::VerifyCompressedRoundRoot {
+                proof: Binary::default(),
+                public_values: round_root_public_values(2, 2, 7),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::MissingTreeVerifierConfig));
+    }
+
+    #[test]
+    fn round_root_rejects_leaf_count_mismatch_before_verification() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            InstantiateMsg {
+                round_id: None,
+                expected: plan(),
+                tree_verifier: Some(tree_verifier_config(7)),
+            },
+        )
+        .unwrap();
+
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            ExecuteMsg::VerifyCompressedRoundRoot {
+                proof: Binary::default(),
+                public_values: round_root_public_values(3, 2, 7),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::RoundRootPlanMismatch { .. }));
+    }
+
+    #[test]
+    fn round_root_rejects_program_identity_mismatch_before_verification() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            InstantiateMsg {
+                round_id: None,
+                expected: plan(),
+                tree_verifier: Some(tree_verifier_config(7)),
+            },
+        )
+        .unwrap();
+
+        let mut public_values = round_root_public_values(2, 2, 7).to_vec();
+        public_values[8 + 1 + 6 * 4] = 8;
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            ExecuteMsg::VerifyCompressedRoundRoot {
+                proof: Binary::default(),
+                public_values: Binary::from(public_values),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ContractError::RoundRootIdentityMismatch { field }
+                if field == "base_program_vkey_digest"
+        ));
+    }
+
+    #[test]
+    fn round_root_is_rejected_after_partial_progress() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            InstantiateMsg {
+                round_id: None,
+                expected: plan(),
+                tree_verifier: Some(tree_verifier_config(7)),
+            },
+        )
+        .unwrap();
+        ROUND_STATE
+            .update(deps.as_mut().storage, |mut state| -> StdResult<_> {
+                state.completed.process_deactivate = 1;
+                Ok(state)
+            })
+            .unwrap();
+
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("sender", &[]),
+            ExecuteMsg::VerifyCompressedRoundRoot {
+                proof: Binary::default(),
+                public_values: round_root_public_values(2, 2, 7),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::RoundAlreadyStarted));
+    }
+
+    fn tree_verifier_config(fill: u8) -> TreeVerifierConfig {
+        TreeVerifierConfig {
+            tree_vkey_hash: Binary::from(vec![fill; 32]),
+            base_program_vkey_digest: Binary::from(vec![fill; 32]),
+            tree_program_vkey_digest: Binary::from(vec![fill; 32]),
+            expected_poll_id: Binary::from(vec![fill; 32]),
+            expected_coord_pub_key_hash: Binary::from(vec![fill; 32]),
+        }
+    }
+
+    fn round_root_public_values(
+        process_messages_leaf_count: u32,
+        tally_leaf_count: u32,
+        fill: u8,
+    ) -> Binary {
+        let mut out = Vec::with_capacity(TREE_ROUND_ROOT_PUBLIC_LEN);
+        out.extend_from_slice(TREE_AGGREGATE_MAGIC);
+        out.push(TREE_TAG_ROUND_ROOT);
+        for value in [
+            4,
+            2 + process_messages_leaf_count + tally_leaf_count,
+            process_messages_leaf_count,
+            tally_leaf_count,
+            1,
+            1,
+        ] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&[fill; 32]);
+        out.extend_from_slice(&[fill; 32]);
+        out.extend_from_slice(&[fill; 32]);
+        out.extend_from_slice(&[fill; 32]);
+        for _ in 0..11 {
+            out.extend_from_slice(&[0u8; 32]);
+        }
+        assert_eq!(out.len(), TREE_ROUND_ROOT_PUBLIC_LEN);
         Binary::from(out)
     }
 }

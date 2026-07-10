@@ -254,6 +254,64 @@ The local aggregate E2E manifest is
 `fixtures/round-e2e.fifteen-signup.aggregate.example.json`. The matching
 non-aggregate manifest is `fixtures/round-e2e.fifteen-signup.example.json`.
 
+### Fixed-Fan-In Tree Aggregation
+
+For rounds with many process-message or tally child proofs, build a recursive
+tree with at most five children per node and one final round-root proof:
+
+```bash
+nohup env CARGO_TARGET_DIR=/tmp/zkvm-amaci-sp1-tree-target \
+  scripts/run_fifteen_signup_sp1_tree.sh \
+  > logs/fifteen-signup-tree-run-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+This command consumes the full `*.sp1-compressed-proof.bin` child artifacts
+from the preceding 15-signup run. It is serial and resumable. Success requires
+all three markers:
+
+```text
+tree round build ok
+tree round proof verify ok
+tree round suite ok
+```
+
+Copy `sp1-proofs/fifteen-signup-tree-round-artifacts.tar.gz` back to the local
+machine, extract it under `sp1-proofs`, and use
+`fixtures/round-e2e.fifteen-signup.tree.example.json`. The contract then
+verifies one final compressed proof instead of nine base proofs or four flat
+stage transactions.
+
+The complete design, identity binding, generic CLI and artifact list are in
+`docs/sp1_tree_aggregation.md`.
+
+### 50-Signup Multi-Group E2E
+
+The recommended larger benchmark upgrades the state tree to depth 3 while
+keeping process-message and tally batches at five. It generates 10
+process-message proofs, 11 tally proofs and a fixed-fan-in tree round root.
+
+Run the execute-only memory/instruction preflight first:
+
+```bash
+mkdir -p logs metrics sp1-proofs
+
+nohup env SP1_TARGET_DIR=/tmp/zkvm-amaci-sp1-fifty-target \
+  scripts/run_fifty_signup_sp1_preflight.sh \
+  > logs/fifty-signup-preflight-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+```bash
+nohup env \
+  SP1_TARGET_DIR=/tmp/zkvm-amaci-sp1-fifty-target \
+  TREE_TARGET_DIR=/tmp/zkvm-amaci-sp1-tree-target \
+  scripts/run_fifty_signup_sp1_tree_e2e.sh \
+  > logs/fifty-signup-tree-e2e-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+The command is serial and resumable. Detailed data, completion checks,
+artifact paths and local chain comparison commands are in
+`docs/fifty_signup_tree_e2e.md`.
+
 ## Groth16 Wrapper
 
 Generate a Groth16-wrapped proof and verify the raw on-chain artifacts:

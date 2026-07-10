@@ -20,6 +20,7 @@ pub mod pq_kem;
 pub mod public_output;
 pub mod round_fixture;
 pub mod sample_inputs;
+pub mod tree_aggregate;
 pub mod types;
 
 pub use aggregate::*;
