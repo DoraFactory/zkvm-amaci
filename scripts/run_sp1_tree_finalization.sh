@@ -4,10 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 usage:
-  scripts/run_sp1_tree_round.sh PREFIX PROCESS_CHILD_COUNT TALLY_CHILD_COUNT
+  scripts/run_sp1_tree_finalization.sh PREFIX PROCESS_CHILD_COUNT TALLY_CHILD_COUNT
 
-Consumes full SP1 compressed SDK proofs named under sp1-proofs/, builds fixed
-fan-in-5 process-message and tally trees, and exports one final round-root proof.
+Consumes post-round SP1 compressed SDK proofs named under sp1-proofs/, builds
+separate fan-in-5 process-message and tally trees, and exports one finalization
+root proof. ProcessDeactivate and AddNewKey remain online contract proofs.
 USAGE
 }
 
@@ -34,9 +35,7 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 log="logs/sp1-tree-${prefix}-${stamp}.log"
 time_log="metrics/sp1-tree-${prefix}-${stamp}.time.txt"
 metrics="metrics/sp1-tree-${prefix}-${stamp}.metrics.txt"
-archive="sp1-proofs/${prefix}-tree-round-artifacts.tar.gz"
-deactivate="sp1-proofs/${prefix}-process-deactivate.sp1-compressed-proof.bin"
-add_key="sp1-proofs/${prefix}-add-new-key.sp1-compressed-proof.bin"
+archive="sp1-proofs/${prefix}-tree-finalization-artifacts.tar.gz"
 
 mkdir -p logs metrics sp1-proofs "$output_dir"
 
@@ -49,7 +48,7 @@ for ((i = 0; i < tally_count; i++)); do
   tally_children+=("sp1-proofs/${prefix}-tally-${i}.sp1-compressed-proof.bin")
 done
 
-for child in "$deactivate" "$add_key" "${process_children[@]}" "${tally_children[@]}"; do
+for child in "${process_children[@]}" "${tally_children[@]}"; do
   if [[ ! -f "$child" ]]; then
     echo "missing child proof: $child" >&2
     exit 1
@@ -65,9 +64,7 @@ stat_size() {
 }
 
 tree_args=(
-  build-round
-  --deactivate-proof "$deactivate"
-  --add-key-proof "$add_key"
+  build-finalization
 )
 for child in "${process_children[@]}"; do
   tree_args+=(--process-child "$child")
@@ -91,25 +88,26 @@ tree_args+=(--output-dir "$output_dir")
   env CARGO_TARGET_DIR="$target_dir" \
     cargo --config configs/cargo-sp1-native-patches.toml run --release \
       -p amaci-proof-sp1-tree-host -- \
-      verify-round \
-      --proof-bytes "$output_dir/round-root.proof.bytes" \
-      --public-bytes "$output_dir/round-root.public.bin" \
-      --vkey "$output_dir/round-root.vkey.bin"
+      verify-finalization \
+      --proof-bytes "$output_dir/finalization-root.proof.bytes" \
+      --public-bytes "$output_dir/finalization-root.public.bin" \
+      --vkey "$output_dir/finalization-root.vkey.bin"
 
   archive_paths=(
     "${prefix}-tree/contract-config.json"
+    "${prefix}-tree/close-checkpoint.json"
     "${prefix}-tree/manifest.json"
-    "${prefix}-tree/round-root.proof.bytes"
-    "${prefix}-tree/round-root.public.bin"
-    "${prefix}-tree/round-root.public.json"
-    "${prefix}-tree/round-root.vkey.bin"
-    "${prefix}-tree/round-root.metrics.json"
-    "${prefix}-tree/round-root.verify-compressed.msg.json"
+    "${prefix}-tree/finalization-root.proof.bytes"
+    "${prefix}-tree/finalization-root.public.bin"
+    "${prefix}-tree/finalization-root.public.json"
+    "${prefix}-tree/finalization-root.vkey.bin"
+    "${prefix}-tree/finalization-root.metrics.json"
+    "${prefix}-tree/finalization-root.verify-compressed.msg.json"
   )
   tar -czf "$archive" -C sp1-proofs "${archive_paths[@]}"
 
   {
-    echo "backend=sp1-tree-round"
+    echo "backend=sp1-tree-finalization"
     echo "prefix=$prefix"
     echo "stamp=$stamp"
     echo "fanout=5"
@@ -119,9 +117,9 @@ tree_args+=(--output-dir "$output_dir")
     echo "output_dir=$output_dir"
     echo "log=$log"
     echo "time_log=$time_log"
-    echo "proof_bytes=$(stat_size "$output_dir/round-root.proof.bytes")"
-    echo "public_bytes=$(stat_size "$output_dir/round-root.public.bin")"
-    echo "vkey_bytes=$(stat_size "$output_dir/round-root.vkey.bin")"
+    echo "proof_bytes=$(stat_size "$output_dir/finalization-root.proof.bytes")"
+    echo "public_bytes=$(stat_size "$output_dir/finalization-root.public.bin")"
+    echo "vkey_bytes=$(stat_size "$output_dir/finalization-root.vkey.bin")"
     echo "archive=$archive"
     echo "archive_bytes=$(stat_size "$archive")"
     awk -F': ' '/Maximum resident set size/ { print "max_rss_kbytes=" $2 }' "$time_log"
@@ -129,7 +127,7 @@ tree_args+=(--output-dir "$output_dir")
     echo "verify=ok"
   } > "$metrics"
 
-  echo "tree round suite ok"
+  echo "tree finalization suite ok"
   echo "metrics=$metrics"
   echo "archive=$archive"
 } 2>&1 | tee "$log"

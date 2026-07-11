@@ -1,6 +1,6 @@
 use amaci_proof_core::tree_aggregate::{
     build_tree_request_output, decode_tree_public_output, machine_vkey_digest_bytes,
-    RoundRootPublicOutput, TreeAggregatePublicOutput, TreeAggregateRequest,
+    FinalizationRootPublicOutput, TreeAggregatePublicOutput, TreeAggregateRequest,
     TreeAggregateRequestKind, TreeProgramIdentity, TREE_FANOUT,
 };
 use base64::Engine;
@@ -27,26 +27,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = env::args().skip(1).collect::<Vec<_>>();
     match parse_command(&args)? {
-        Command::BuildRound(args) => build_round(args)?,
-        Command::VerifyRound(args) => verify_round(args)?,
+        Command::BuildFinalization(args) => build_finalization(args)?,
+        Command::VerifyFinalization(args) => verify_finalization(args)?,
     }
     Ok(())
 }
 
 enum Command {
-    BuildRound(BuildRoundArgs),
-    VerifyRound(VerifyRoundArgs),
+    BuildFinalization(BuildFinalizationArgs),
+    VerifyFinalization(VerifyFinalizationArgs),
 }
 
-struct BuildRoundArgs {
-    deactivate_proof: PathBuf,
-    add_key_proof: PathBuf,
+struct BuildFinalizationArgs {
     process_children: Vec<PathBuf>,
     tally_children: Vec<PathBuf>,
     output_dir: PathBuf,
 }
 
-struct VerifyRoundArgs {
+struct VerifyFinalizationArgs {
     proof: Option<PathBuf>,
     proof_bytes: Option<PathBuf>,
     public_bytes: Option<PathBuf>,
@@ -55,30 +53,24 @@ struct VerifyRoundArgs {
 
 fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     match args.first().map(String::as_str) {
-        Some("build-round") => parse_build_round(&args[1..]).map(Command::BuildRound),
-        Some("verify-round") => parse_verify_round(&args[1..]).map(Command::VerifyRound),
+        Some("build-finalization") => {
+            parse_build_finalization(&args[1..]).map(Command::BuildFinalization)
+        }
+        Some("verify-finalization") => {
+            parse_verify_finalization(&args[1..]).map(Command::VerifyFinalization)
+        }
         Some("--help") | Some("-h") | None => Err(usage().into()),
         Some(other) => Err(format!("unknown command: {other}\n\n{}", usage()).into()),
     }
 }
 
-fn parse_build_round(args: &[String]) -> Result<BuildRoundArgs, Box<dyn Error>> {
-    let mut deactivate_proof = None;
-    let mut add_key_proof = None;
+fn parse_build_finalization(args: &[String]) -> Result<BuildFinalizationArgs, Box<dyn Error>> {
     let mut process_children = Vec::new();
     let mut tally_children = Vec::new();
-    let mut output_dir = PathBuf::from("sp1-proofs/tree-round");
+    let mut output_dir = PathBuf::from("sp1-proofs/tree-finalization");
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--deactivate-proof" => {
-                i += 1;
-                deactivate_proof = Some(next_path(args, i, "--deactivate-proof")?);
-            }
-            "--add-key-proof" => {
-                i += 1;
-                add_key_proof = Some(next_path(args, i, "--add-key-proof")?);
-            }
             "--process-child" => {
                 i += 1;
                 process_children.push(next_path(args, i, "--process-child")?);
@@ -92,23 +84,21 @@ fn parse_build_round(args: &[String]) -> Result<BuildRoundArgs, Box<dyn Error>> 
                 output_dir = next_path(args, i, "--output-dir")?;
             }
             "--help" | "-h" => return Err(usage().into()),
-            other => return Err(format!("unknown build-round argument: {other}").into()),
+            other => return Err(format!("unknown build-finalization argument: {other}").into()),
         }
         i += 1;
     }
     if process_children.is_empty() || tally_children.is_empty() {
-        return Err("build-round requires process-message and tally child proofs".into());
+        return Err("build-finalization requires process-message and tally child proofs".into());
     }
-    Ok(BuildRoundArgs {
-        deactivate_proof: deactivate_proof.ok_or("missing --deactivate-proof")?,
-        add_key_proof: add_key_proof.ok_or("missing --add-key-proof")?,
+    Ok(BuildFinalizationArgs {
         process_children,
         tally_children,
         output_dir,
     })
 }
 
-fn parse_verify_round(args: &[String]) -> Result<VerifyRoundArgs, Box<dyn Error>> {
+fn parse_verify_finalization(args: &[String]) -> Result<VerifyFinalizationArgs, Box<dyn Error>> {
     let mut proof = None;
     let mut proof_bytes = None;
     let mut public_bytes = None;
@@ -133,14 +123,14 @@ fn parse_verify_round(args: &[String]) -> Result<VerifyRoundArgs, Box<dyn Error>
                 vkey = Some(next_path(args, i, "--vkey")?);
             }
             "--help" | "-h" => return Err(usage().into()),
-            other => return Err(format!("unknown verify-round argument: {other}").into()),
+            other => return Err(format!("unknown verify-finalization argument: {other}").into()),
         }
         i += 1;
     }
     if proof.is_none() && (proof_bytes.is_none() || public_bytes.is_none() || vkey.is_none()) {
-        return Err("verify-round requires --proof or all raw artifact paths".into());
+        return Err("verify-finalization requires --proof or all raw artifact paths".into());
     }
-    Ok(VerifyRoundArgs {
+    Ok(VerifyFinalizationArgs {
         proof,
         proof_bytes,
         public_bytes,
@@ -195,15 +185,17 @@ struct BuildManifest {
     recursive_node_count: usize,
     base_program_vkey_digest: String,
     tree_program_vkey_digest: String,
+    base_compressed_vkey_hash: String,
     tree_compressed_vkey_hash: String,
     process_messages_root: String,
     tally_root: String,
-    round_root: String,
+    finalization_root: String,
     contract_config: String,
+    close_checkpoint: String,
     execute_msg: String,
 }
 
-fn build_round(args: BuildRoundArgs) -> Result<(), Box<dyn Error>> {
+fn build_finalization(args: BuildFinalizationArgs) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&args.output_dir)?;
     let process_level_widths = tree_level_widths(args.process_children.len());
     let tally_level_widths = tree_level_widths(args.tally_children.len());
@@ -241,11 +233,7 @@ fn build_round(args: BuildRoundArgs) -> Result<(), Box<dyn Error>> {
         &args.output_dir,
     )?;
 
-    let deactivate = load_and_verify(&client, &args.deactivate_proof, &base_pk)?;
-    let add_key = load_and_verify(&client, &args.add_key_proof, &base_pk)?;
-    let round_children = vec![
-        deactivate,
-        add_key,
+    let finalization_children = vec![
         ProofArtifact {
             proof: process_root.artifact.proof,
             proof_path: process_root.artifact.proof_path.clone(),
@@ -255,40 +243,43 @@ fn build_round(args: BuildRoundArgs) -> Result<(), Box<dyn Error>> {
             proof_path: tally_root.artifact.proof_path.clone(),
         },
     ];
-    let round_request = TreeAggregateRequest {
-        kind: TreeAggregateRequestKind::RoundRoot,
+    let finalization_request = TreeAggregateRequest {
+        kind: TreeAggregateRequestKind::FinalizationRoot,
         identity: identity.clone(),
-        child_vkey_digests: vec![
-            base_vkey_words,
-            base_vkey_words,
-            tree_vkey_words,
-            tree_vkey_words,
-        ],
-        child_public_outputs: round_children
+        child_vkey_digests: vec![tree_vkey_words, tree_vkey_words],
+        child_public_outputs: finalization_children
             .iter()
             .map(|child| child.proof.public_values.to_vec())
             .collect(),
     };
-    let round_prefix = args.output_dir.join("round-root");
-    let round_root = prove_request(
+    let finalization_prefix = args.output_dir.join("finalization-root");
+    let finalization_root = prove_request(
         &client,
         &tree_pk,
-        &round_children,
-        &[&base_pk, &base_pk, &tree_pk, &tree_pk],
-        round_request,
-        &round_prefix,
+        &finalization_children,
+        &[&tree_pk, &tree_pk],
+        finalization_request,
+        &finalization_prefix,
     )?;
-    let round_output = match decode_tree_public_output(round_root.proof.public_values.as_slice())? {
-        TreeAggregatePublicOutput::RoundRoot(output) => output,
-        _ => return Err("tree host produced a non-round final proof".into()),
-    };
-    write_contract_artifacts(&args.output_dir, &round_root.proof, &tree_pk, &round_output)?;
+    let finalization_output =
+        match decode_tree_public_output(finalization_root.proof.public_values.as_slice())? {
+            TreeAggregatePublicOutput::FinalizationRoot(output) => output,
+            _ => return Err("tree host produced a non-finalization proof".into()),
+        };
+    write_contract_artifacts(
+        &args.output_dir,
+        &finalization_root.proof,
+        &base_pk,
+        &tree_pk,
+        &finalization_output,
+    )?;
 
     let tree_vkey_hash = compressed_vkey_hash_bytes(tree_pk.verifying_key());
     let contract_config_path = args.output_dir.join("contract-config.json");
+    let close_checkpoint_path = args.output_dir.join("close-checkpoint.json");
     let execute_msg_path = args
         .output_dir
-        .join("round-root.verify-compressed.msg.json");
+        .join("finalization-root.verify-compressed.msg.json");
     let manifest = BuildManifest {
         fanout: TREE_FANOUT,
         process_messages_leaf_count: process_root.leaf_count,
@@ -300,11 +291,13 @@ fn build_round(args: BuildRoundArgs) -> Result<(), Box<dyn Error>> {
         recursive_node_count,
         base_program_vkey_digest: hex_bytes(&identity.base_program_vkey),
         tree_program_vkey_digest: hex_bytes(&identity.tree_program_vkey),
+        base_compressed_vkey_hash: hex_bytes(&compressed_vkey_hash_bytes(base_pk.verifying_key())),
         tree_compressed_vkey_hash: hex_bytes(&tree_vkey_hash),
         process_messages_root: process_root.artifact.proof_path.display().to_string(),
         tally_root: tally_root.artifact.proof_path.display().to_string(),
-        round_root: round_root.proof_path.display().to_string(),
+        finalization_root: finalization_root.proof_path.display().to_string(),
         contract_config: contract_config_path.display().to_string(),
+        close_checkpoint: close_checkpoint_path.display().to_string(),
         execute_msg: execute_msg_path.display().to_string(),
     };
     atomic_write(
@@ -312,14 +305,18 @@ fn build_round(args: BuildRoundArgs) -> Result<(), Box<dyn Error>> {
         format!("{}\n", serde_json::to_string_pretty(&manifest)?).as_bytes(),
     )?;
 
-    println!("tree round build ok");
+    println!("tree finalization build ok");
     println!("fanout={TREE_FANOUT}");
     println!("process_messages_leaf_count={}", process_root.leaf_count);
     println!("process_messages_levels={}", process_root.level_count);
     println!("tally_leaf_count={}", tally_root.leaf_count);
     println!("tally_levels={}", tally_root.level_count);
-    println!("round_root={}", round_root.proof_path.display());
+    println!(
+        "finalization_root={}",
+        finalization_root.proof_path.display()
+    );
     println!("contract_config={}", contract_config_path.display());
+    println!("close_checkpoint={}", close_checkpoint_path.display());
     println!("execute_msg={}", execute_msg_path.display());
     Ok(())
 }
@@ -394,15 +391,17 @@ fn prove_request(
     let expected = build_tree_request_output(&request)?;
     let proof_path = artifact_path(prefix, ".proof.bin");
     if proof_path.is_file() {
-        let proof = SP1ProofWithPublicValues::load(&proof_path)?;
-        client.verify(&proof, tree_pk.verifying_key(), None)?;
-        let actual = decode_tree_public_output(proof.public_values.as_slice())?;
-        if actual != expected {
-            return Err(format!("cached tree node mismatch: {}", proof_path.display()).into());
+        if let Ok(proof) = SP1ProofWithPublicValues::load(&proof_path) {
+            let valid = client.verify(&proof, tree_pk.verifying_key(), None).is_ok()
+                && decode_tree_public_output(proof.public_values.as_slice())
+                    .is_ok_and(|actual| actual == expected);
+            if valid {
+                write_artifacts(prefix, &proof, tree_pk, 0)?;
+                println!("resume={}", proof_path.display());
+                return Ok(ProofArtifact { proof, proof_path });
+            }
         }
-        write_artifacts(prefix, &proof, tree_pk, 0)?;
-        println!("resume={}", proof_path.display());
-        return Ok(ProofArtifact { proof, proof_path });
+        println!("cache_incompatible={}", proof_path.display());
     }
 
     if children.len() != child_pks.len() {
@@ -499,13 +498,15 @@ fn write_artifacts(
 fn write_contract_artifacts(
     output_dir: &Path,
     proof: &SP1ProofWithPublicValues,
+    base_pk: &SP1ProvingKey,
     tree_pk: &SP1ProvingKey,
-    output: &RoundRootPublicOutput,
+    output: &FinalizationRootPublicOutput,
 ) -> Result<(), Box<dyn Error>> {
     let b64 = base64::engine::general_purpose::STANDARD;
     let proof_bytes = compressed_proof_bytes(proof)?;
     let tree_vkey_hash = compressed_vkey_hash_bytes(tree_pk.verifying_key());
     let config = json!({
+        "base_vkey_hash": b64.encode(compressed_vkey_hash_bytes(base_pk.verifying_key())),
         "tree_vkey_hash": b64.encode(&tree_vkey_hash),
         "base_program_vkey_digest": b64.encode(output.identity.base_program_vkey),
         "tree_program_vkey_digest": b64.encode(output.identity.tree_program_vkey),
@@ -516,20 +517,29 @@ fn write_contract_artifacts(
         &output_dir.join("contract-config.json"),
         format!("{}\n", serde_json::to_string_pretty(&config)?).as_bytes(),
     )?;
+    let checkpoint = json!({
+        "initial_state_commitment": b64.encode(output.initial_state_commitment),
+        "message_batch_start_hash": b64.encode(output.initial_batch_start_hash),
+        "message_batch_end_hash": b64.encode(output.final_batch_end_hash),
+    });
+    atomic_write(
+        &output_dir.join("close-checkpoint.json"),
+        format!("{}\n", serde_json::to_string_pretty(&checkpoint)?).as_bytes(),
+    )?;
     let msg = json!({
-        "verify_compressed_round_root": {
+        "verify_compressed_finalization_root": {
             "proof": b64.encode(proof_bytes),
             "public_values": b64.encode(proof.public_values.as_slice()),
         }
     });
     atomic_write(
-        &output_dir.join("round-root.verify-compressed.msg.json"),
+        &output_dir.join("finalization-root.verify-compressed.msg.json"),
         format!("{}\n", serde_json::to_string(&msg)?).as_bytes(),
     )?;
     Ok(())
 }
 
-fn verify_round(args: VerifyRoundArgs) -> Result<(), Box<dyn Error>> {
+fn verify_finalization(args: VerifyFinalizationArgs) -> Result<(), Box<dyn Error>> {
     let (proof_bytes, public_values, vkey_hash) = if let Some(path) = args.proof {
         let proof = SP1ProofWithPublicValues::load(path)?;
         let client = ProverClient::builder().cpu().build();
@@ -549,10 +559,10 @@ fn verify_round(args: VerifyRoundArgs) -> Result<(), Box<dyn Error>> {
     };
     SP1CompressedVerifierRaw::verify_with_public_values(&proof_bytes, &public_values, &vkey_hash)?;
     let output = decode_tree_public_output(&public_values)?;
-    if !matches!(output, TreeAggregatePublicOutput::RoundRoot(_)) {
-        return Err("verified tree proof is not a round root".into());
+    if !matches!(output, TreeAggregatePublicOutput::FinalizationRoot(_)) {
+        return Err("verified tree proof is not a finalization root".into());
     }
-    println!("tree round proof verify ok");
+    println!("tree finalization proof verify ok");
     println!("proof_bytes={}", proof_bytes.len());
     println!("public_bytes={}", public_values.len());
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -567,7 +577,7 @@ fn output_metrics(output: &TreeAggregatePublicOutput) -> (u32, u32, u32) {
         TreeAggregatePublicOutput::Tally(output) => {
             (output.direct_child_count, output.leaf_count, output.level)
         }
-        TreeAggregatePublicOutput::RoundRoot(output) => {
+        TreeAggregatePublicOutput::FinalizationRoot(output) => {
             (output.direct_child_count, output.total_leaf_count, 0)
         }
     }
@@ -637,7 +647,7 @@ fn tree_level_widths(mut child_count: usize) -> Vec<usize> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  amaci-proof-sp1-tree-host build-round --deactivate-proof PATH --add-key-proof PATH --process-child PATH ... --tally-child PATH ... [--output-dir DIR]\n  amaci-proof-sp1-tree-host verify-round --proof PATH\n  amaci-proof-sp1-tree-host verify-round --proof-bytes PATH --public-bytes PATH --vkey PATH"
+    "usage:\n  amaci-proof-sp1-tree-host build-finalization --process-child PATH ... --tally-child PATH ... [--output-dir DIR]\n  amaci-proof-sp1-tree-host verify-finalization --proof PATH\n  amaci-proof-sp1-tree-host verify-finalization --proof-bytes PATH --public-bytes PATH --vkey PATH"
 }
 
 #[cfg(test)]

@@ -732,3 +732,330 @@ proof。child 数继续增加时，aggregate proving 的内存和时间也会增
 round 应改用固定 fan-in 的树形聚合，例如每 4 或 5 个 proof 聚合一组，再聚合
 上一层输出。最终链上仍只验证一个 stage aggregate proof，但单个 prover job 的
 输入规模可以保持稳定。
+
+## 22. 50-Signup 树形聚合 E2E
+
+在 15-signup 扁平聚合完成后，本项目进一步实现了固定 `fan-in = 5` 的树形聚合，
+并使用 50 个 signup、50 条 message 的确定性 fixture 完成了一轮本地链 E2E。
+
+测试场景：
+
+```text
+state tree depth: 3
+batch size: 5
+initial signups: 50
+final state leaves after AddNewKey: 51
+messages: 50
+processMessages base proofs: 10
+tally base proofs: 11
+all base proofs: 23
+recursive aggregation nodes: 8
+final on-chain proofs: 1
+```
+
+本轮最终状态：
+
+```text
+round complete: true
+verified proofs: 1
+completed.process_deactivate: 1
+completed.add_new_key: 1
+completed.process_messages: 10
+completed.tally: 11
+```
+
+这里的 `verified_proofs = 1` 表示 CosmWasm 合约只调用了一次 SP1 compressed
+verifier。最终 Round Root proof 已递归验证全部 23 个基础 proof，并在 public
+values 中携带各阶段数量、身份信息、状态连续性和最终 commitment。
+
+## 23. 固定 Fan-In 树结构
+
+树形聚合使用每个节点最多 5 个 child proof 的结构。processMessages 的 10 个
+leaf proof 聚合为：
+
+```text
+10 leaves -> 2 level-1 nodes -> 1 processMessages root
+level widths: [2, 1]
+recursive nodes: 3
+```
+
+tally 的 11 个 leaf proof 聚合为：
+
+```text
+11 leaves -> 3 level-1 nodes -> 1 tally root
+level widths: [3, 1]
+recursive nodes: 4
+```
+
+最终 Round Root 节点递归验证四个直接 child：
+
+```text
+processDeactivate base proof
+addNewKey base proof
+processMessages tree root
+tally tree root
+                 -> final Round Root proof
+```
+
+因此递归节点总数为：
+
+```text
+3 processMessages nodes + 4 tally nodes + 1 Round Root node = 8
+```
+
+树形聚合入口和约束分别位于：
+
+| 模块 | 文件 | 作用 |
+| --- | --- | --- |
+| 树形聚合公共类型与检查 | [`tree_aggregate.rs`](../crates/proof-core/src/tree_aggregate.rs) | 校验节点类型、层级、child 数、阶段连续性和 Round Root public output。 |
+| SP1 tree guest | [`proof-sp1-tree-program/src/main.rs`](../crates/proof-sp1-tree-program/src/main.rs) | 在 zkVM 内递归验证 child proof 并提交树节点 public values。 |
+| SP1 tree host | [`proof-sp1-tree-host/src/main.rs`](../crates/proof-sp1-tree-host/src/main.rs) | 构建单个树节点、生成 compressed proof 和最终 Round Root artifacts。 |
+| 树形调度脚本 | [`run_sp1_tree_round.sh`](../scripts/run_sp1_tree_round.sh) | 按 fan-in 5 流式构建 processMessages、tally 和 Round Root。 |
+| 50-signup 完整流程 | [`run_fifty_signup_sp1_tree_e2e.sh`](../scripts/run_fifty_signup_sp1_tree_e2e.sh) | 生成基础 proofs、构建聚合树、验证并打包 artifacts。 |
+| CosmWasm verifier | [`contract.rs`](../crates/cosmwasm-amaci-round/src/contract.rs) | 使用固定 tree vkey 验证最终 Round Root，并一次性完成所有 round stage。 |
+| 本地链 E2E manifest | [`round-e2e.fifty-signup.tree.example.json`](../fixtures/round-e2e.fifty-signup.tree.example.json) | 定义本轮规模、预期 stage 数、vkey 配置和最终 proof 消息。 |
+
+## 24. 高性能机器产物
+
+高性能机器完成全部基础 proof 和树形递归 proof 后，输出：
+
+```text
+tree round build ok
+tree round proof verify ok
+tree round suite ok
+fifty signup SP1 tree E2E artifacts ready
+```
+
+最终归档：
+
+```text
+sp1-proofs/fifty-signup-tree-round-artifacts.tar.gz
+```
+
+归档 SHA-256：
+
+```text
+688a2903d922c07c9429a9d71d1684f6e49861f6480d8cadc597eb8bc34b4415
+```
+
+归档中的关键文件：
+
+| 文件 | 大小/作用 |
+| --- | --- |
+| `round-root.proof.bytes` | 1,272,546 bytes，最终 SP1 compressed proof。 |
+| `round-root.public.bin` | 513 bytes，Round Root public values。 |
+| `round-root.vkey.bin` | 32 bytes，tree program compressed vkey hash。 |
+| `round-root.verify-compressed.msg.json` | 1,697,476 bytes，可直接提交 CosmWasm 的 Base64 JSON 消息。 |
+| `contract-config.json` | 固定 base/tree vkey、poll ID 和 coordinator public key hash。 |
+| `manifest.json` | leaf 数量、树宽度、递归节点数量和 root 路径。 |
+
+树形 proving 指标：
+
+```text
+direct_child_count: 4
+leaf_count: 23
+final Round Root node proving elapsed: 84,379 ms
+proof_bytes: 1,272,546
+public_bytes: 513
+```
+
+这里的 `84,379 ms` 只统计最终 Round Root 节点，不是全部 8 个递归节点的累计
+proving 时间。完整树的 wall time 和峰值内存由高性能机器上的 tree suite
+`time_log` 记录；后续优化比较应同时采集每个节点和整棵树两个口径。
+
+## 25. 本地 CosmWasm E2E
+
+本地测试使用：
+
+```text
+chain: zkvm-amaci-devnet
+RPC: http://127.0.0.1:26657
+cost gas price: 10000000000 peaka/gas
+code ID: 11
+contract: dora1x8gwn06l85q0lyncy7zsde8zzdn588k2dck00a8j6lkprydcutwqtlh33s
+```
+
+执行命令：
+
+```bash
+npm run build:round-contract
+
+node scripts/run_cosmwasm_round_e2e.mjs \
+  --manifest fixtures/round-e2e.fifty-signup.tree.example.json
+```
+
+结果保存在：
+
+```text
+round-e2e-results/20260711041227/summary.json
+round-e2e-results/20260711041227/summary.md
+```
+
+## 26. 50-Signup 链上 Gas 和 DORA
+
+| 步骤 | 高度 | Gas wanted | Gas used | 估算 DORA | 交易哈希 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| store_code | 84632 | 3,937,729 | 3,581,364 | 0.035813640 | `1F332818F6B86B2B5D283A05B365DCEA78287E1B9CD211F1996E3E65659E3EF0` |
+| instantiate_round | 84633 | 235,868 | 170,081 | 0.001700810 | `D0F0CD4C5789543CDDA1495A7C332540B548E383F1781F333943D6E72B648B27` |
+| round_root | 84634 | 300,000,000 | 20,354,283 | 0.203542830 | `1F13B7C8E7C1BA11F69869A4464D67897797422F08B974A7117D377FB8A94557` |
+
+汇总：
+
+```text
+total gas used: 24,105,728
+total estimated cost: 0.241057280 DORA
+round-root verify gas: 20,354,283
+round-root verify estimated cost: 0.203542830 DORA
+```
+
+本地 devnet 的 `signGasPricePeaka = 0`，因此浏览器显示的实际交易 fee 为
+`0 DORA`。表中的 DORA 使用 `10000000000 peaka/gas` 作为成本参数计算，便于和
+之前的 E2E 保持一致。
+
+## 27. Tally 正确性和验证边界
+
+50 条确定性 message 的预期原始 tally 为：
+
+```text
+[10, 20, 27, 36, 50]
+```
+
+高性能机器上的 fixture 执行和基础 proof 生成检查每个 processMessages/tally
+batch 的前后 commitment；树形聚合继续约束所有相邻 child 的顺序、数量和
+commitment 连续性。最终 Round Root public values 包含经过验证的
+`final_tally_commitment`，CosmWasm 合约验证该 Round Root proof 和固定 vkey。
+
+需要明确的是，合约不会把明文数组 `[10, 20, 27, 36, 50]` 作为状态保存或直接
+逐项比较。链上验证的是与该结果绑定的最终 tally commitment。E2E runner 中的
+`expectedRawResults` 用于报告和 fixture 对照；明文 tally 与 commitment 的对应
+关系由 Rust guest 执行和 SP1 proof 保证。
+
+## 28. 50-Signup Aggregation Gas 对比
+
+本次没有在链上重新提交 50-signup 的全部 23 个 non-aggregate proof，因此下面的
+树形聚合数据是本轮实测值，non-aggregate 数据是基于第 18 节 15-signup
+non-aggregate 实测结果得到的估算值，不能混淆为同轮实测。
+
+已有 non-aggregate 实测基准：
+
+```text
+processDeactivate:          20,339,171 gas
+addNewKey:                  20,339,486 gas
+processMessages average:    20,339,137.67 gas
+tally average:              20,337,161.75 gas
+```
+
+50-signup non-aggregate 路径需要：
+
+```text
+1 processDeactivate + 1 addNewKey + 10 processMessages + 11 tally
+= 23 verifier calls
+```
+
+估算公式：
+
+```text
+20,339,171
++ 20,339,486
++ 10 * 20,339,137.67
++ 11 * 20,337,161.75
+= 467,778,813 gas
+```
+
+本轮树形聚合 Round Root 的实测 verifier Gas 为：
+
+```text
+20,354,283 gas
+```
+
+对比结果：
+
+| 指标 | Non-aggregate 估算 | Tree aggregation 实测 | 节省 |
+| --- | ---: | ---: | ---: |
+| 链上 proof verify 交易数 | 23 | 1 | 22 |
+| proof verify gas | 467,778,813 | 20,354,283 | 447,424,530 |
+| proof verify 估算 DORA | 4.677788130 | 0.203542830 | 4.474245300 |
+| proof verify gas 降幅 | - | - | 95.649% |
+| 包含 store/instantiate 的总 gas | 471,530,258 | 24,105,728 | 447,424,530 |
+| 包含 store/instantiate 的总估算 DORA | 4.715302580 | 0.241057280 | 4.474245300 |
+| 总 Gas 降幅 | - | - | 94.888% |
+
+两条路径使用相同的本轮 `store_code = 3,581,364 gas` 和
+`instantiate_round = 170,081 gas` 计算总成本，因此总成本差额全部来自减少的
+22 次 verifier 调用。DORA 仍按 `10000000000 peaka/gas` 估算。
+
+这项节省只描述链上验证成本。树形聚合需要额外生成 8 个递归 proof，增加了链下
+prover 的时间、内存和计算成本；它没有让单个 compressed proof 的链上验证更便宜，
+而是把 23 次约 `20.34M gas` 的验证收敛成 1 次约 `20.35M gas` 的验证。
+
+## 29. 50-Signup 树形聚合结论
+
+本轮证明了固定 fan-in 树形聚合可以把 23 个基础 proof 收敛为一个约 1.27 MB 的
+最终 compressed proof，并在链上通过一次约 `20.35M gas` 的 verifier 调用完成
+整个 round。随着 signup/message 数增加，最终链上 proof 数和单次验证成本不会
+随 leaf proof 数线性增加；增加的成本主要转移到链下递归 proving 节点。
+
+与 non-aggregate 基准估算相比，本轮减少 22 次 verifier 调用，预计节省
+`447,424,530 gas`，对应 `4.474245300 DORA`，proof verify Gas 降幅约
+`95.649%`。要获得完全同条件的实测差值，仍应使用同一份 50-signup fixture、同一
+合约 Wasm 和同一 devnet 配置运行 non-aggregate manifest，再以两份
+`summary.json` 进行对比。
+
+## 30. 生产生命周期修正：Online Proof + Finalization Root
+
+第 22-29 节记录的是已经完成的 `AMACITR2` 全 Round Root 实测。该模型把
+ProcessDeactivate、AddNewKey、ProcessMessages 和 Tally 全部延迟到一个最终 proof
+确认。后续业务模型确认 ProcessDeactivate/AddNewKey 在 round 进行期间需要及时
+生效，因此生产实现已调整为：
+
+```text
+Round open:
+  ProcessDeactivate proof -> 单独验证并更新 deactivate state
+  AddNewKey proof          -> 单独验证并消费 nullifier
+
+Close round:
+  冻结 state/message/deactivate checkpoint
+
+Post-round:
+  ProcessMessages Tree Root
+  Tally Tree Root
+          -> Finalization Root
+```
+
+新的 tree public codec 为 `AMACITR3`，Finalization Root 只有两个直接 child，不再
+递归验证已经在链上确认过的两个在线 proof。旧 `AMACITR2` proof 与新 tree program
+vkey 不兼容，需要在高性能机器重新生成。
+
+50-signup 新流程的链上 proof verifier 调用为：
+
+```text
+1 ProcessDeactivate
+1 AddNewKey
+1 Finalization Root
+= 3 verifier calls
+```
+
+相对于 23 个 base proof 全部分别验证，新的生产模型减少 20 次 verifier 调用。使用
+第 18 节的单次在线 proof 实测 Gas 和第 26 节旧 Round Root 的单次 tree verifier
+Gas 作为近似值：
+
+| 指标 | Non-aggregate 估算 | Online + Finalization 估算 | 节省 |
+| --- | ---: | ---: | ---: |
+| proof verifier 调用 | 23 | 3 | 20 |
+| proof verify gas | 467,778,813 | 61,032,940 | 406,745,873 |
+| proof verify 估算 DORA | 4.677788130 | 0.610329400 | 4.067458730 |
+| proof verify Gas 降幅 | - | - | 86.953% |
+
+这里还没有计入 `close_round` 的普通合约交易 Gas。它不执行 proof verifier，预计远
+低于一次约 `20.34M gas` 的 compressed proof 验证。最终准确数据必须等新的
+Finalization Root artifacts 生成后，在同一 devnet 完成 E2E 再写入。
+
+新实现入口：
+
+- [`sp1_tree_aggregation.md`](sp1_tree_aggregation.md)：在线和结算生命周期设计；
+- [`contract.rs`](../crates/cosmwasm-amaci-round/src/contract.rs)：在线 proof、checkpoint
+  和 Finalization Root 状态机；
+- [`tree_aggregate.rs`](../crates/proof-core/src/tree_aggregate.rs)：`AMACITR3`
+  Finalization Root 约束；
+- [`run_sp1_tree_finalization.sh`](../scripts/run_sp1_tree_finalization.sh)：高性能机器
+  finalization tree runner。

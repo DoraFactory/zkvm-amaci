@@ -4,18 +4,32 @@ use cosmwasm_std::Binary;
 #[cw_serde]
 pub struct InstantiateMsg {
     pub round_id: Option<String>,
-    pub expected: RoundPlan,
-    #[serde(default)]
-    pub tree_verifier: Option<TreeVerifierConfig>,
+    pub verifier: VerifierConfig,
+    pub initial_online_state: InitialOnlineState,
 }
 
 #[cw_serde]
-pub struct TreeVerifierConfig {
+pub struct VerifierConfig {
+    pub base_vkey_hash: Binary,
     pub tree_vkey_hash: Binary,
     pub base_program_vkey_digest: Binary,
     pub tree_program_vkey_digest: Binary,
     pub expected_poll_id: Binary,
     pub expected_coord_pub_key_hash: Binary,
+}
+
+#[cw_serde]
+pub struct InitialOnlineState {
+    pub current_deactivate_commitment: Binary,
+    pub deactivate_batch_start_hash: Binary,
+}
+
+#[cw_serde]
+pub struct RoundCheckpoint {
+    pub initial_state_commitment: Binary,
+    pub message_batch_start_hash: Binary,
+    pub message_batch_end_hash: Binary,
+    pub deactivate_commitment: Binary,
 }
 
 #[cw_serde]
@@ -28,19 +42,19 @@ pub struct RoundPlan {
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    VerifyCompressedStage {
+    VerifyOnlineProof {
         stage: RoundStage,
         proof: Binary,
         public_values: Binary,
-        vkey_hash: Binary,
     },
-    VerifyCompressedAggregateStage {
-        stage: RoundStage,
-        proof: Binary,
-        public_values: Binary,
-        vkey_hash: Binary,
+    CloseRound {
+        process_messages_count: u32,
+        tally_count: u32,
+        initial_state_commitment: Binary,
+        message_batch_start_hash: Binary,
+        message_batch_end_hash: Binary,
     },
-    VerifyCompressedRoundRoot {
+    VerifyCompressedFinalizationRoot {
         proof: Binary,
         public_values: Binary,
     },
@@ -66,6 +80,13 @@ impl RoundStage {
 }
 
 #[cw_serde]
+pub enum RoundPhase {
+    Open,
+    Closed,
+    Finalized,
+}
+
+#[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
     #[returns(RoundStateResponse)]
@@ -75,9 +96,20 @@ pub enum QueryMsg {
 #[cw_serde]
 pub struct RoundStateResponse {
     pub round_id: String,
+    pub operator: String,
+    pub phase: RoundPhase,
     pub expected: RoundPlan,
     pub completed: RoundPlan,
-    pub next_stage: Option<RoundStage>,
+    pub online_state: OnlineStateResponse,
+    pub checkpoint: Option<RoundCheckpoint>,
     pub is_complete: bool,
     pub verified_proofs: u32,
+}
+
+#[cw_serde]
+pub struct OnlineStateResponse {
+    pub current_deactivate_commitment: Binary,
+    pub deactivate_batch_end_hash: Binary,
+    pub latest_deactivate_root: Option<Binary>,
+    pub latest_state_root: Option<Binary>,
 }

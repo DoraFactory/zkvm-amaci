@@ -256,8 +256,9 @@ non-aggregate manifest is `fixtures/round-e2e.fifteen-signup.example.json`.
 
 ### Fixed-Fan-In Tree Aggregation
 
-For rounds with many process-message or tally child proofs, build a recursive
-tree with at most five children per node and one final round-root proof:
+For rounds with many process-message or tally child proofs, build two recursive
+stage trees with at most five children per node and one post-round finalization
+proof. ProcessDeactivate and AddNewKey stay on the online verification path:
 
 ```bash
 nohup env CARGO_TARGET_DIR=/tmp/zkvm-amaci-sp1-tree-target \
@@ -270,16 +271,18 @@ from the preceding 15-signup run. It is serial and resumable. Success requires
 all three markers:
 
 ```text
-tree round build ok
-tree round proof verify ok
-tree round suite ok
+tree finalization build ok
+tree finalization proof verify ok
+tree finalization suite ok
 ```
 
-Copy `sp1-proofs/fifteen-signup-tree-round-artifacts.tar.gz` back to the local
-machine, extract it under `sp1-proofs`, and use
+Copy `sp1-proofs/fifteen-signup-tree-finalization-artifacts.tar.gz` and the
+matching online proof messages back to the local machine, extract them under
+`sp1-proofs`, and use
 `fixtures/round-e2e.fifteen-signup.tree.example.json`. The contract then
-verifies one final compressed proof instead of nine base proofs or four flat
-stage transactions.
+verifies Deactivate/AddNewKey while the round is open, freezes a close
+checkpoint, then verifies one final compressed proof for ProcessMessages and
+Tally.
 
 The complete design, identity binding, generic CLI and artifact list are in
 `docs/sp1_tree_aggregation.md`.
@@ -288,7 +291,7 @@ The complete design, identity binding, generic CLI and artifact list are in
 
 The recommended larger benchmark upgrades the state tree to depth 3 while
 keeping process-message and tally batches at five. It generates 10
-process-message proofs, 11 tally proofs and a fixed-fan-in tree round root.
+process-message proofs, 11 tally proofs and a fixed-fan-in Finalization Root.
 
 Run the execute-only memory/instruction preflight first:
 

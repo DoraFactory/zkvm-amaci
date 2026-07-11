@@ -1,19 +1,17 @@
 use crate::aggregate::{
     build_process_messages_aggregate_public_output, build_tally_aggregate_public_output,
 };
-use crate::codec::decode_public_output;
 use crate::error::{ProofError, ProofResult};
 use crate::native_types::Digest;
-use crate::public_output::PublicOutput;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as Sha2Digest, Sha256};
 
 pub const TREE_FANOUT: usize = 5;
-pub const TREE_AGGREGATE_MAGIC: &[u8; 8] = b"AMACITR2";
+pub const TREE_AGGREGATE_MAGIC: &[u8; 8] = b"AMACITR3";
 
 const TAG_PROCESS_MESSAGES: u8 = 1;
 const TAG_TALLY: u8 = 2;
-const TAG_ROUND_ROOT: u8 = 3;
+const TAG_FINALIZATION_ROOT: u8 = 3;
 const CHILD_KIND_BASE: u8 = 1;
 const CHILD_KIND_TREE: u8 = 2;
 const TREE_NODE_HASH_DOMAIN: &[u8] = b"AMACI_ZKVM_TREE_NODE_V2";
@@ -32,7 +30,7 @@ pub enum TreeAggregateRequestKind {
     ProcessMessagesInternal,
     TallyLeaf,
     TallyInternal,
-    RoundRoot,
+    FinalizationRoot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,7 +45,7 @@ pub struct TreeAggregateRequest {
 pub enum TreeAggregatePublicOutput {
     ProcessMessages(ProcessMessagesTreePublicOutput),
     Tally(TallyTreePublicOutput),
-    RoundRoot(RoundRootPublicOutput),
+    FinalizationRoot(FinalizationRootPublicOutput),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +80,7 @@ pub struct TallyTreePublicOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoundRootPublicOutput {
+pub struct FinalizationRootPublicOutput {
     pub direct_child_count: u32,
     pub total_leaf_count: u32,
     pub process_messages_leaf_count: u32,
@@ -92,7 +90,6 @@ pub struct RoundRootPublicOutput {
     pub identity: TreeProgramIdentity,
     pub coord_pub_key_hash: Digest,
     pub expected_poll_id: Digest,
-    pub new_deactivate_root: Digest,
     pub initial_batch_start_hash: Digest,
     pub final_batch_end_hash: Digest,
     pub initial_state_commitment: Digest,
@@ -144,12 +141,11 @@ pub fn build_tree_request_output(
                 &request.identity,
             )?))
         }
-        TreeAggregateRequestKind::RoundRoot => {
-            validate_child_vkeys(request, ChildVkeyPattern::RoundRoot)?;
-            Ok(TreeAggregatePublicOutput::RoundRoot(build_round_root(
-                &request.child_public_outputs,
-                &request.identity,
-            )?))
+        TreeAggregateRequestKind::FinalizationRoot => {
+            validate_child_vkeys(request, ChildVkeyPattern::FinalizationRoot)?;
+            Ok(TreeAggregatePublicOutput::FinalizationRoot(
+                build_finalization_root(&request.child_public_outputs, &request.identity)?,
+            ))
         }
     }
 }
@@ -201,8 +197,8 @@ pub fn encode_tree_public_output(output: &TreeAggregatePublicOutput) -> Vec<u8> 
                 write_digest(&mut out, digest);
             }
         }
-        TreeAggregatePublicOutput::RoundRoot(output) => {
-            out.push(TAG_ROUND_ROOT);
+        TreeAggregatePublicOutput::FinalizationRoot(output) => {
+            out.push(TAG_FINALIZATION_ROOT);
             for value in [
                 output.direct_child_count,
                 output.total_leaf_count,
@@ -217,7 +213,6 @@ pub fn encode_tree_public_output(output: &TreeAggregatePublicOutput) -> Vec<u8> 
             for digest in [
                 &output.coord_pub_key_hash,
                 &output.expected_poll_id,
-                &output.new_deactivate_root,
                 &output.initial_batch_start_hash,
                 &output.final_batch_end_hash,
                 &output.initial_state_commitment,
@@ -274,28 +269,30 @@ pub fn decode_tree_public_output(bytes: &[u8]) -> ProofResult<TreeAggregatePubli
                 subtree_root: decoder.read_digest("subtree root")?,
             })
         }
-        TAG_ROUND_ROOT => TreeAggregatePublicOutput::RoundRoot(RoundRootPublicOutput {
-            direct_child_count: decoder.read_u32("direct child count")?,
-            total_leaf_count: decoder.read_u32("total leaf count")?,
-            process_messages_leaf_count: decoder.read_u32("process messages leaf count")?,
-            tally_leaf_count: decoder.read_u32("tally leaf count")?,
-            process_messages_level: decoder.read_u32("process messages level")?,
-            tally_level: decoder.read_u32("tally level")?,
-            identity: decoder.read_identity()?,
-            coord_pub_key_hash: decoder.read_digest("coordinator public key hash")?,
-            expected_poll_id: decoder.read_digest("expected poll id")?,
-            new_deactivate_root: decoder.read_digest("new deactivate root")?,
-            initial_batch_start_hash: decoder.read_digest("initial batch start hash")?,
-            final_batch_end_hash: decoder.read_digest("final batch end hash")?,
-            initial_state_commitment: decoder.read_digest("initial state commitment")?,
-            final_state_commitment: decoder.read_digest("final state commitment")?,
-            deactivate_commitment: decoder.read_digest("deactivate commitment")?,
-            initial_tally_commitment: decoder.read_digest("initial tally commitment")?,
-            final_tally_commitment: decoder.read_digest("final tally commitment")?,
-            process_messages_subtree_root: decoder.read_digest("process messages subtree root")?,
-            tally_subtree_root: decoder.read_digest("tally subtree root")?,
-            children_root: decoder.read_digest("round children root")?,
-        }),
+        TAG_FINALIZATION_ROOT => {
+            TreeAggregatePublicOutput::FinalizationRoot(FinalizationRootPublicOutput {
+                direct_child_count: decoder.read_u32("direct child count")?,
+                total_leaf_count: decoder.read_u32("total leaf count")?,
+                process_messages_leaf_count: decoder.read_u32("process messages leaf count")?,
+                tally_leaf_count: decoder.read_u32("tally leaf count")?,
+                process_messages_level: decoder.read_u32("process messages level")?,
+                tally_level: decoder.read_u32("tally level")?,
+                identity: decoder.read_identity()?,
+                coord_pub_key_hash: decoder.read_digest("coordinator public key hash")?,
+                expected_poll_id: decoder.read_digest("expected poll id")?,
+                initial_batch_start_hash: decoder.read_digest("initial batch start hash")?,
+                final_batch_end_hash: decoder.read_digest("final batch end hash")?,
+                initial_state_commitment: decoder.read_digest("initial state commitment")?,
+                final_state_commitment: decoder.read_digest("final state commitment")?,
+                deactivate_commitment: decoder.read_digest("deactivate commitment")?,
+                initial_tally_commitment: decoder.read_digest("initial tally commitment")?,
+                final_tally_commitment: decoder.read_digest("final tally commitment")?,
+                process_messages_subtree_root: decoder
+                    .read_digest("process messages subtree root")?,
+                tally_subtree_root: decoder.read_digest("tally subtree root")?,
+                children_root: decoder.read_digest("finalization children root")?,
+            })
+        }
         _ => {
             return Err(ProofError::Codec(format!(
                 "unknown tree aggregate output tag {tag}"
@@ -517,97 +514,62 @@ fn build_tally_internal(
     })
 }
 
-fn build_round_root(
+fn build_finalization_root(
     children: &[Vec<u8>],
     identity: &TreeProgramIdentity,
-) -> ProofResult<RoundRootPublicOutput> {
-    if children.len() != 4 {
+) -> ProofResult<FinalizationRootPublicOutput> {
+    if children.len() != 2 {
         return Err(ProofError::InvalidLength {
-            name: "round root children",
-            expected: 4,
+            name: "finalization root children",
+            expected: 2,
             actual: children.len(),
         });
     }
-    let deactivate = match decode_public_output(&children[0])? {
-        PublicOutput::ProcessDeactivate(output) => output,
-        _ => {
-            return Err(ProofError::Codec(
-                "round child 0 is not process deactivate".to_string(),
-            ))
-        }
-    };
-    let add_key = match decode_public_output(&children[1])? {
-        PublicOutput::AddNewKey(output) => output,
-        _ => {
-            return Err(ProofError::Codec(
-                "round child 1 is not add new key".to_string(),
-            ))
-        }
-    };
-    let process_messages = match decode_tree_public_output(&children[2])? {
+    let process_messages = match decode_tree_public_output(&children[0])? {
         TreeAggregatePublicOutput::ProcessMessages(output) => output,
         _ => {
             return Err(ProofError::Codec(
-                "round child 2 is not process messages root".to_string(),
+                "finalization child 0 is not process messages root".to_string(),
             ))
         }
     };
-    let tally = match decode_tree_public_output(&children[3])? {
+    let tally = match decode_tree_public_output(&children[1])? {
         TreeAggregatePublicOutput::Tally(output) => output,
         _ => {
             return Err(ProofError::Codec(
-                "round child 3 is not tally root".to_string(),
+                "finalization child 1 is not tally root".to_string(),
             ))
         }
     };
     if process_messages.identity != *identity || tally.identity != *identity {
         return Err(ProofError::Codec(
-            "round tree identity mismatch".to_string(),
+            "finalization tree identity mismatch".to_string(),
         ));
-    }
-    if deactivate.new_deactivate_root != add_key.deactivate_root {
-        return Err(ProofError::Codec(
-            "round deactivate root did not link to add new key".to_string(),
-        ));
-    }
-    if deactivate.coord_pub_key_hash != add_key.coord_pub_key_hash
-        || deactivate.coord_pub_key_hash != process_messages.coord_pub_key_hash
-    {
-        return Err(ProofError::Codec(
-            "round coordinator public key hash mismatch".to_string(),
-        ));
-    }
-    if deactivate.expected_poll_id != add_key.poll_id
-        || deactivate.expected_poll_id != process_messages.expected_poll_id
-    {
-        return Err(ProofError::Codec("round poll id mismatch".to_string()));
     }
     if process_messages.final_state_commitment != tally.state_commitment {
         return Err(ProofError::Codec(
-            "round process messages state did not link to tally".to_string(),
+            "finalization process messages state did not link to tally".to_string(),
         ));
     }
     if tally.first_batch_num != 0 || tally.last_batch_num.checked_add(1) != Some(tally.leaf_count) {
         return Err(ProofError::Codec(
-            "round tally root does not cover batches from zero".to_string(),
+            "finalization tally root does not cover batches from zero".to_string(),
         ));
     }
     let total_leaf_count = process_messages
         .leaf_count
         .checked_add(tally.leaf_count)
-        .and_then(|count| count.checked_add(2))
-        .ok_or_else(|| ProofError::Codec("round leaf count overflow".to_string()))?;
-    Ok(RoundRootPublicOutput {
-        direct_child_count: 4,
+        .ok_or_else(|| ProofError::Codec("finalization leaf count overflow".to_string()))?;
+    Ok(FinalizationRootPublicOutput {
+        direct_child_count: 2,
         total_leaf_count,
         process_messages_leaf_count: process_messages.leaf_count,
         tally_leaf_count: tally.leaf_count,
         process_messages_level: process_messages.level,
         tally_level: tally.level,
         identity: identity.clone(),
-        coord_pub_key_hash: deactivate.coord_pub_key_hash,
-        expected_poll_id: deactivate.expected_poll_id,
-        new_deactivate_root: deactivate.new_deactivate_root,
+        coord_pub_key_hash: process_messages.coord_pub_key_hash,
+        expected_poll_id: process_messages.expected_poll_id,
         initial_batch_start_hash: process_messages.initial_batch_start_hash,
         final_batch_end_hash: process_messages.final_batch_end_hash,
         initial_state_commitment: process_messages.initial_state_commitment,
@@ -617,7 +579,7 @@ fn build_round_root(
         final_tally_commitment: tally.final_tally_commitment,
         process_messages_subtree_root: process_messages.subtree_root,
         tally_subtree_root: tally.subtree_root,
-        children_root: tree_children_root(TAG_ROUND_ROOT, 0, CHILD_KIND_TREE, children),
+        children_root: tree_children_root(TAG_FINALIZATION_ROOT, 0, CHILD_KIND_TREE, children),
     })
 }
 
@@ -630,11 +592,11 @@ fn validate_request_shape(request: &TreeAggregateRequest) -> ProofResult<()> {
             actual: request.child_vkey_digests.len(),
         });
     }
-    if request.kind == TreeAggregateRequestKind::RoundRoot {
-        if expected != 4 {
+    if request.kind == TreeAggregateRequestKind::FinalizationRoot {
+        if expected != 2 {
             return Err(ProofError::InvalidLength {
-                name: "round root children",
-                expected: 4,
+                name: "finalization root children",
+                expected: 2,
                 actual: expected,
             });
         }
@@ -651,7 +613,7 @@ fn validate_request_shape(request: &TreeAggregateRequest) -> ProofResult<()> {
 enum ChildVkeyPattern {
     AllBase,
     AllTree,
-    RoundRoot,
+    FinalizationRoot,
 }
 
 fn validate_child_vkeys(
@@ -663,8 +625,7 @@ fn validate_child_vkeys(
         let expected = match pattern {
             ChildVkeyPattern::AllBase => request.identity.base_program_vkey,
             ChildVkeyPattern::AllTree => request.identity.tree_program_vkey,
-            ChildVkeyPattern::RoundRoot if idx < 2 => request.identity.base_program_vkey,
-            ChildVkeyPattern::RoundRoot => request.identity.tree_program_vkey,
+            ChildVkeyPattern::FinalizationRoot => request.identity.tree_program_vkey,
         };
         if actual != expected {
             return Err(ProofError::Codec(format!(
@@ -917,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn fifteen_signup_round_builds_single_round_root() {
+    fn fifteen_signup_round_builds_single_finalization_root() {
         let fixture = fifteen_signup_round_fixture().unwrap();
         let stage_outputs = fixture
             .stages
@@ -946,31 +907,26 @@ mod tests {
         let tally_root =
             encode_tree_public_output(&build_tree_request_output(&tally_request).unwrap());
 
-        let round_request = TreeAggregateRequest {
-            kind: TreeAggregateRequestKind::RoundRoot,
+        let finalization_request = TreeAggregateRequest {
+            kind: TreeAggregateRequestKind::FinalizationRoot,
             identity,
-            child_vkey_digests: vec![base_vkey, base_vkey, tree_vkey, tree_vkey],
-            child_public_outputs: vec![
-                stage_outputs[0].clone(),
-                stage_outputs[1].clone(),
-                process_root,
-                tally_root,
-            ],
+            child_vkey_digests: vec![tree_vkey, tree_vkey],
+            child_public_outputs: vec![process_root, tally_root],
         };
-        let TreeAggregatePublicOutput::RoundRoot(root) =
-            build_tree_request_output(&round_request).unwrap()
+        let TreeAggregatePublicOutput::FinalizationRoot(root) =
+            build_tree_request_output(&finalization_request).unwrap()
         else {
-            panic!("request must produce a round root");
+            panic!("request must produce a finalization root");
         };
         assert_eq!(root.process_messages_leaf_count, 3);
         assert_eq!(root.tally_leaf_count, 4);
-        assert_eq!(root.total_leaf_count, 9);
-        assert_eq!(root.direct_child_count, 4);
-        let encoded = encode_tree_public_output(&TreeAggregatePublicOutput::RoundRoot(root));
-        assert_eq!(encoded.len(), 513);
+        assert_eq!(root.total_leaf_count, 7);
+        assert_eq!(root.direct_child_count, 2);
+        let encoded = encode_tree_public_output(&TreeAggregatePublicOutput::FinalizationRoot(root));
+        assert_eq!(encoded.len(), 481);
         assert!(matches!(
             decode_tree_public_output(&encoded).unwrap(),
-            TreeAggregatePublicOutput::RoundRoot(_)
+            TreeAggregatePublicOutput::FinalizationRoot(_)
         ));
     }
 
@@ -1019,24 +975,19 @@ mod tests {
         assert_eq!(tally_summary.leaf_count, 11);
 
         let request = TreeAggregateRequest {
-            kind: TreeAggregateRequestKind::RoundRoot,
+            kind: TreeAggregateRequestKind::FinalizationRoot,
             identity,
-            child_vkey_digests: vec![base_vkey, base_vkey, tree_vkey, tree_vkey],
-            child_public_outputs: vec![
-                stage_outputs[0].clone(),
-                stage_outputs[1].clone(),
-                process_root,
-                tally_root,
-            ],
+            child_vkey_digests: vec![tree_vkey, tree_vkey],
+            child_public_outputs: vec![process_root, tally_root],
         };
-        let TreeAggregatePublicOutput::RoundRoot(root) =
+        let TreeAggregatePublicOutput::FinalizationRoot(root) =
             build_tree_request_output(&request).unwrap()
         else {
-            panic!("request must produce a round root");
+            panic!("request must produce a finalization root");
         };
         assert_eq!(root.process_messages_leaf_count, 10);
         assert_eq!(root.tally_leaf_count, 11);
-        assert_eq!(root.total_leaf_count, 23);
+        assert_eq!(root.total_leaf_count, 21);
         assert_eq!(root.process_messages_level, 2);
         assert_eq!(root.tally_level, 2);
     }

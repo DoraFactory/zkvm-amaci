@@ -5,256 +5,352 @@ use sp1_verifier::compressed::SP1CompressedVerifierRaw;
 
 use crate::error::ContractError;
 use crate::msg::{
-    ExecuteMsg, InstantiateMsg, QueryMsg, RoundStage, RoundStateResponse, TreeVerifierConfig,
+    ExecuteMsg, InstantiateMsg, OnlineStateResponse, QueryMsg, RoundCheckpoint, RoundPhase,
+    RoundStage, RoundStateResponse, VerifierConfig,
 };
-use crate::state::{empty_completed_plan, plan_total, StoredRoundState, ROUND_STATE};
+use crate::state::{
+    empty_completed_plan, OnlineState, StoredRoundState, ROUND_STATE, USED_NULLIFIERS,
+    VERIFIED_DEACTIVATE_ROOTS,
+};
 
-const AGGREGATE_MAGIC: &[u8; 8] = b"AMACIAG1";
-const AGGREGATE_TAG_PROCESS_MESSAGES: u8 = 1;
-const AGGREGATE_TAG_TALLY: u8 = 2;
-const PROCESS_MESSAGES_AGGREGATE_PUBLIC_LEN: usize = 8 + 1 + 4 + 9 * 32;
-const TALLY_AGGREGATE_PUBLIC_LEN: usize = 8 + 1 + 4 + 2 * 4 + 4 * 32;
-const TREE_AGGREGATE_MAGIC: &[u8; 8] = b"AMACITR2";
-const TREE_TAG_ROUND_ROOT: u8 = 3;
-const TREE_ROUND_ROOT_PUBLIC_LEN: usize = 8 + 1 + 6 * 4 + 2 * 32 + 13 * 32;
+const PUBLIC_MAGIC: &[u8; 8] = b"AMACIPU1";
+const TAG_PROCESS_DEACTIVATE: u8 = 3;
+const TAG_ADD_NEW_KEY: u8 = 4;
+const PROCESS_DEACTIVATE_PUBLIC_LEN: usize = 8 + 1 + 9 * 32;
+const ADD_NEW_KEY_PUBLIC_LEN: usize = 8 + 1 + 10 * 32;
+
+const TREE_MAGIC: &[u8; 8] = b"AMACITR3";
+const TAG_FINALIZATION_ROOT: u8 = 3;
+const FINALIZATION_ROOT_PUBLIC_LEN: usize = 8 + 1 + 6 * 4 + 14 * 32;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    if plan_total(&msg.expected) == 0 {
-        return Err(ContractError::EmptyRoundPlan);
-    }
-    if let Some(config) = &msg.tree_verifier {
-        validate_tree_verifier_config(config)?;
-    }
+    validate_verifier_config(&msg.verifier)?;
+    require_len(
+        "initial_online_state.current_deactivate_commitment",
+        &msg.initial_online_state.current_deactivate_commitment,
+    )?;
+    require_len(
+        "initial_online_state.deactivate_batch_start_hash",
+        &msg.initial_online_state.deactivate_batch_start_hash,
+    )?;
 
     let round_id = msg
         .round_id
         .unwrap_or_else(|| "zkvm-amaci-round-e2e".to_string());
     let state = StoredRoundState {
         round_id: round_id.clone(),
-        expected: msg.expected,
+        operator: info.sender.clone(),
+        phase: RoundPhase::Open,
+        expected: empty_completed_plan(),
         completed: empty_completed_plan(),
         verified_proofs: 0,
-        tree_verifier: msg.tree_verifier,
+        verifier: msg.verifier,
+        online: OnlineState {
+            current_deactivate_commitment: msg.initial_online_state.current_deactivate_commitment,
+            deactivate_batch_end_hash: msg.initial_online_state.deactivate_batch_start_hash,
+            latest_deactivate_root: None,
+            latest_state_root: None,
+        },
+        checkpoint: None,
     };
     ROUND_STATE.save(deps.storage, &state)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
         .add_attribute("round_id", round_id)
-        .add_attribute("proof_mode", "sp1_compressed"))
+        .add_attribute("operator", info.sender)
+        .add_attribute("phase", "open"))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     _env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::VerifyCompressedStage {
+        ExecuteMsg::VerifyOnlineProof {
             stage,
             proof,
             public_values,
-            vkey_hash,
-        } => execute_verify_compressed_stage(deps, stage, proof, public_values, vkey_hash),
-        ExecuteMsg::VerifyCompressedAggregateStage {
-            stage,
+        } => execute_verify_online_proof(deps, info, stage, proof, public_values),
+        ExecuteMsg::CloseRound {
+            process_messages_count,
+            tally_count,
+            initial_state_commitment,
+            message_batch_start_hash,
+            message_batch_end_hash,
+        } => execute_close_round(
+            deps,
+            info,
+            process_messages_count,
+            tally_count,
+            initial_state_commitment,
+            message_batch_start_hash,
+            message_batch_end_hash,
+        ),
+        ExecuteMsg::VerifyCompressedFinalizationRoot {
             proof,
             public_values,
-            vkey_hash,
-        } => {
-            execute_verify_compressed_aggregate_stage(deps, stage, proof, public_values, vkey_hash)
-        }
-        ExecuteMsg::VerifyCompressedRoundRoot {
-            proof,
-            public_values,
-        } => execute_verify_compressed_round_root(deps, proof, public_values),
+        } => execute_verify_finalization_root(deps, proof, public_values),
     }
 }
 
-fn execute_verify_compressed_round_root(
+fn execute_verify_online_proof(
+    deps: DepsMut,
+    info: MessageInfo,
+    stage: RoundStage,
+    proof: Binary,
+    public_values: Binary,
+) -> Result<Response, ContractError> {
+    let mut state = ROUND_STATE.load(deps.storage)?;
+    require_phase(&state, RoundPhase::Open)?;
+    if !matches!(stage, RoundStage::ProcessDeactivate | RoundStage::AddNewKey) {
+        return Err(ContractError::UnsupportedOnlineStage { stage });
+    }
+
+    let output = decode_online_public_output(&public_values)?;
+    match (stage.clone(), output) {
+        (RoundStage::ProcessDeactivate, OnlinePublicOutput::ProcessDeactivate(output)) => {
+            if info.sender != state.operator {
+                return Err(ContractError::Unauthorized);
+            }
+            require_identity(
+                "expected_coord_pub_key_hash",
+                &output.coord_pub_key_hash,
+                &state.verifier.expected_coord_pub_key_hash,
+            )?;
+            require_identity(
+                "expected_poll_id",
+                &output.expected_poll_id,
+                &state.verifier.expected_poll_id,
+            )?;
+            require_transition(
+                "current_deactivate_commitment",
+                &output.current_deactivate_commitment,
+                &state.online.current_deactivate_commitment,
+            )?;
+            require_transition(
+                "deactivate_batch_start_hash",
+                &output.batch_start_hash,
+                &state.online.deactivate_batch_end_hash,
+            )?;
+
+            verify_sp1_compressed(&proof, &public_values, &state.verifier.base_vkey_hash)?;
+            VERIFIED_DEACTIVATE_ROOTS.save(
+                deps.storage,
+                output.new_deactivate_root.as_slice(),
+                &true,
+            )?;
+            state.online.current_deactivate_commitment = output.new_deactivate_commitment;
+            state.online.deactivate_batch_end_hash = output.batch_end_hash;
+            state.online.latest_deactivate_root = Some(output.new_deactivate_root);
+            state.online.latest_state_root = Some(output.current_state_root);
+            state.completed.process_deactivate =
+                state.completed.process_deactivate.checked_add(1).ok_or(
+                    ContractError::OnlineCounterOverflow {
+                        stage: stage.clone(),
+                    },
+                )?;
+        }
+        (RoundStage::AddNewKey, OnlinePublicOutput::AddNewKey(output)) => {
+            require_identity(
+                "expected_coord_pub_key_hash",
+                &output.coord_pub_key_hash,
+                &state.verifier.expected_coord_pub_key_hash,
+            )?;
+            require_identity(
+                "expected_poll_id",
+                &output.poll_id,
+                &state.verifier.expected_poll_id,
+            )?;
+            if !VERIFIED_DEACTIVATE_ROOTS
+                .may_load(deps.storage, output.deactivate_root.as_slice())?
+                .unwrap_or(false)
+            {
+                return Err(ContractError::UnknownDeactivateRoot);
+            }
+            if USED_NULLIFIERS
+                .may_load(deps.storage, output.nullifier.as_slice())?
+                .unwrap_or(false)
+            {
+                return Err(ContractError::NullifierAlreadyUsed);
+            }
+
+            verify_sp1_compressed(&proof, &public_values, &state.verifier.base_vkey_hash)?;
+            USED_NULLIFIERS.save(deps.storage, output.nullifier.as_slice(), &true)?;
+            state.completed.add_new_key = state.completed.add_new_key.checked_add(1).ok_or(
+                ContractError::OnlineCounterOverflow {
+                    stage: stage.clone(),
+                },
+            )?;
+        }
+        (expected, actual) => {
+            return Err(ContractError::PublicOutputStageMismatch {
+                expected,
+                actual: actual.stage(),
+            })
+        }
+    }
+
+    state.verified_proofs += 1;
+    ROUND_STATE.save(deps.storage, &state)?;
+    Ok(Response::new()
+        .add_attribute("method", "verify_online_proof")
+        .add_attribute("stage", stage.as_str())
+        .add_attribute("round_id", state.round_id)
+        .add_attribute("phase", "open")
+        .add_attribute("verified_proofs", state.verified_proofs.to_string()))
+}
+
+fn execute_close_round(
+    deps: DepsMut,
+    info: MessageInfo,
+    process_messages_count: u32,
+    tally_count: u32,
+    initial_state_commitment: Binary,
+    message_batch_start_hash: Binary,
+    message_batch_end_hash: Binary,
+) -> Result<Response, ContractError> {
+    let mut state = ROUND_STATE.load(deps.storage)?;
+    require_phase(&state, RoundPhase::Open)?;
+    if info.sender != state.operator {
+        return Err(ContractError::Unauthorized);
+    }
+    if process_messages_count == 0 || tally_count == 0 {
+        return Err(ContractError::InvalidRoundPlan);
+    }
+    require_len("initial_state_commitment", &initial_state_commitment)?;
+    require_len("message_batch_start_hash", &message_batch_start_hash)?;
+    require_len("message_batch_end_hash", &message_batch_end_hash)?;
+
+    state.expected.process_deactivate = state.completed.process_deactivate;
+    state.expected.add_new_key = state.completed.add_new_key;
+    state.expected.process_messages = process_messages_count;
+    state.expected.tally = tally_count;
+    state.checkpoint = Some(RoundCheckpoint {
+        initial_state_commitment,
+        message_batch_start_hash,
+        message_batch_end_hash,
+        deactivate_commitment: state.online.current_deactivate_commitment.clone(),
+    });
+    state.phase = RoundPhase::Closed;
+    ROUND_STATE.save(deps.storage, &state)?;
+
+    Ok(Response::new()
+        .add_attribute("method", "close_round")
+        .add_attribute("round_id", state.round_id)
+        .add_attribute("phase", "closed"))
+}
+
+fn execute_verify_finalization_root(
     deps: DepsMut,
     proof: Binary,
     public_values: Binary,
 ) -> Result<Response, ContractError> {
     let mut state = ROUND_STATE.load(deps.storage)?;
-    if plan_total(&state.completed) != 0 || state.verified_proofs != 0 {
-        return Err(ContractError::RoundAlreadyStarted);
-    }
-    let config = state
-        .tree_verifier
+    require_phase(&state, RoundPhase::Closed)?;
+    let root = decode_finalization_public_output(&public_values)?;
+    let checkpoint = state
+        .checkpoint
         .as_ref()
-        .ok_or(ContractError::MissingTreeVerifierConfig)?;
-    let root = decode_round_root_public_output(&public_values)?;
+        .expect("closed round always has a checkpoint");
 
-    if state.expected.process_deactivate != 1 || state.expected.add_new_key != 1 {
-        return Err(ContractError::RoundRootPlanMismatch {
-            reason:
-                "round-root mode requires exactly one process-deactivate and one add-new-key proof"
-                    .to_string(),
+    if root.direct_child_count != 2 {
+        return Err(ContractError::FinalizationPlanMismatch {
+            reason: format!("expected 2 stage roots, got {}", root.direct_child_count),
         });
     }
-    if root.direct_child_count != 4 {
-        return Err(ContractError::RoundRootPlanMismatch {
-            reason: format!(
-                "expected 4 direct round children, got {}",
-                root.direct_child_count
-            ),
+    if root.process_messages_leaf_count != state.expected.process_messages
+        || root.tally_leaf_count != state.expected.tally
+        || root.total_leaf_count
+            != state
+                .expected
+                .process_messages
+                .saturating_add(state.expected.tally)
+    {
+        return Err(ContractError::FinalizationPlanMismatch {
+            reason: "stage leaf counts do not match the round plan".to_string(),
         });
     }
-    if root.process_messages_leaf_count != state.expected.process_messages {
-        return Err(ContractError::RoundRootPlanMismatch {
-            reason: format!(
-                "process-messages leaf count {}, expected {}",
-                root.process_messages_leaf_count, state.expected.process_messages
-            ),
-        });
+    for (field, actual, expected) in [
+        (
+            "base_program_vkey_digest",
+            &root.base_program_vkey_digest,
+            &state.verifier.base_program_vkey_digest,
+        ),
+        (
+            "tree_program_vkey_digest",
+            &root.tree_program_vkey_digest,
+            &state.verifier.tree_program_vkey_digest,
+        ),
+        (
+            "expected_poll_id",
+            &root.expected_poll_id,
+            &state.verifier.expected_poll_id,
+        ),
+        (
+            "expected_coord_pub_key_hash",
+            &root.coord_pub_key_hash,
+            &state.verifier.expected_coord_pub_key_hash,
+        ),
+    ] {
+        require_identity(field, actual, expected)?;
     }
-    if root.tally_leaf_count != state.expected.tally {
-        return Err(ContractError::RoundRootPlanMismatch {
-            reason: format!(
-                "tally leaf count {}, expected {}",
-                root.tally_leaf_count, state.expected.tally
-            ),
-        });
-    }
-    if root.total_leaf_count != plan_total(&state.expected) {
-        return Err(ContractError::RoundRootPlanMismatch {
-            reason: format!(
-                "total leaf count {}, expected {}",
-                root.total_leaf_count,
-                plan_total(&state.expected)
-            ),
-        });
+    for (field, actual, expected) in [
+        (
+            "initial_state_commitment",
+            &root.initial_state_commitment,
+            &checkpoint.initial_state_commitment,
+        ),
+        (
+            "message_batch_start_hash",
+            &root.initial_batch_start_hash,
+            &checkpoint.message_batch_start_hash,
+        ),
+        (
+            "message_batch_end_hash",
+            &root.final_batch_end_hash,
+            &checkpoint.message_batch_end_hash,
+        ),
+        (
+            "deactivate_commitment",
+            &root.deactivate_commitment,
+            &checkpoint.deactivate_commitment,
+        ),
+    ] {
+        if actual.as_slice() != expected.as_slice() {
+            return Err(ContractError::FinalizationCheckpointMismatch {
+                field: field.to_string(),
+            });
+        }
     }
 
-    require_identity(
-        "base_program_vkey_digest",
-        &root.base_program_vkey_digest,
-        &config.base_program_vkey_digest,
-    )?;
-    require_identity(
-        "tree_program_vkey_digest",
-        &root.tree_program_vkey_digest,
-        &config.tree_program_vkey_digest,
-    )?;
-    require_identity(
-        "expected_poll_id",
-        &root.expected_poll_id,
-        &config.expected_poll_id,
-    )?;
-    require_identity(
-        "expected_coord_pub_key_hash",
-        &root.coord_pub_key_hash,
-        &config.expected_coord_pub_key_hash,
-    )?;
-
-    verify_sp1_compressed(&proof, &public_values, &config.tree_vkey_hash)?;
-    state.completed = state.expected.clone();
+    verify_sp1_compressed(&proof, &public_values, &state.verifier.tree_vkey_hash)?;
+    state.completed.process_messages = state.expected.process_messages;
+    state.completed.tally = state.expected.tally;
     state.verified_proofs += 1;
+    state.phase = RoundPhase::Finalized;
     ROUND_STATE.save(deps.storage, &state)?;
 
     Ok(Response::new()
-        .add_attribute("method", "verify_compressed_round_root")
-        .add_attribute("backend", "sp1")
-        .add_attribute("proof_mode", "compressed_tree_round_root")
+        .add_attribute("method", "verify_compressed_finalization_root")
         .add_attribute("round_id", state.round_id)
+        .add_attribute("phase", "finalized")
         .add_attribute(
             "process_messages_leaf_count",
             root.process_messages_leaf_count.to_string(),
         )
         .add_attribute("tally_leaf_count", root.tally_leaf_count.to_string())
-        .add_attribute("total_leaf_count", root.total_leaf_count.to_string())
         .add_attribute("verified_proofs", state.verified_proofs.to_string())
         .add_attribute("is_complete", "true"))
-}
-
-fn execute_verify_compressed_stage(
-    deps: DepsMut,
-    stage: RoundStage,
-    proof: Binary,
-    public_values: Binary,
-    vkey_hash: Binary,
-) -> Result<Response, ContractError> {
-    let mut state = ROUND_STATE.load(deps.storage)?;
-    let expected_stage = state.next_stage().ok_or(ContractError::RoundComplete)?;
-    if expected_stage != stage {
-        return Err(ContractError::StageOutOfOrder {
-            expected: expected_stage,
-            actual: stage,
-        });
-    }
-
-    verify_sp1_compressed(&proof, &public_values, &vkey_hash)?;
-    advance_stage(&mut state, &stage, 1);
-    ROUND_STATE.save(deps.storage, &state)?;
-    let is_complete = state.is_complete();
-
-    Ok(Response::new()
-        .add_attribute("method", "verify_compressed_stage")
-        .add_attribute("backend", "sp1")
-        .add_attribute("proof_mode", "compressed")
-        .add_attribute("stage", stage.as_str())
-        .add_attribute("round_id", state.round_id.clone())
-        .add_attribute("verified_proofs", state.verified_proofs.to_string())
-        .add_attribute("is_complete", is_complete.to_string()))
-}
-
-fn execute_verify_compressed_aggregate_stage(
-    deps: DepsMut,
-    stage: RoundStage,
-    proof: Binary,
-    public_values: Binary,
-    vkey_hash: Binary,
-) -> Result<Response, ContractError> {
-    let mut state = ROUND_STATE.load(deps.storage)?;
-    let expected_stage = state.next_stage().ok_or(ContractError::RoundComplete)?;
-    if expected_stage != stage {
-        return Err(ContractError::StageOutOfOrder {
-            expected: expected_stage,
-            actual: stage,
-        });
-    }
-    if !matches!(stage, RoundStage::ProcessMessages | RoundStage::Tally) {
-        return Err(ContractError::UnsupportedAggregateStage { stage });
-    }
-
-    let aggregate = decode_aggregate_public_output(&public_values)?;
-    if aggregate.stage != stage {
-        return Err(ContractError::AggregateStageMismatch {
-            expected: stage,
-            actual: aggregate.stage,
-        });
-    }
-    let remaining = remaining_stage_count(&state, &stage);
-    if aggregate.child_count == 0 || aggregate.child_count > remaining {
-        return Err(ContractError::AggregateChildCountTooLarge {
-            remaining,
-            child_count: aggregate.child_count,
-        });
-    }
-
-    verify_sp1_compressed(&proof, &public_values, &vkey_hash)?;
-    advance_stage(&mut state, &stage, aggregate.child_count);
-    ROUND_STATE.save(deps.storage, &state)?;
-    let is_complete = state.is_complete();
-
-    Ok(Response::new()
-        .add_attribute("method", "verify_compressed_aggregate_stage")
-        .add_attribute("backend", "sp1")
-        .add_attribute("proof_mode", "compressed_aggregate")
-        .add_attribute("stage", stage.as_str())
-        .add_attribute("aggregate_child_count", aggregate.child_count.to_string())
-        .add_attribute("round_id", state.round_id.clone())
-        .add_attribute("verified_proofs", state.verified_proofs.to_string())
-        .add_attribute("is_complete", is_complete.to_string()))
 }
 
 pub fn verify_sp1_compressed(
@@ -269,119 +365,129 @@ pub fn verify_sp1_compressed(
     )
 }
 
-fn advance_stage(state: &mut StoredRoundState, stage: &RoundStage, count: u32) {
-    match stage {
-        RoundStage::ProcessDeactivate => state.completed.process_deactivate += count,
-        RoundStage::AddNewKey => state.completed.add_new_key += count,
-        RoundStage::ProcessMessages => state.completed.process_messages += count,
-        RoundStage::Tally => state.completed.tally += count,
-    }
-    state.verified_proofs += 1;
+#[derive(Debug, Clone)]
+enum OnlinePublicOutput {
+    ProcessDeactivate(ProcessDeactivateSummary),
+    AddNewKey(AddNewKeySummary),
 }
 
-fn remaining_stage_count(state: &StoredRoundState, stage: &RoundStage) -> u32 {
-    match stage {
-        RoundStage::ProcessDeactivate => state
-            .expected
-            .process_deactivate
-            .saturating_sub(state.completed.process_deactivate),
-        RoundStage::AddNewKey => state
-            .expected
-            .add_new_key
-            .saturating_sub(state.completed.add_new_key),
-        RoundStage::ProcessMessages => state
-            .expected
-            .process_messages
-            .saturating_sub(state.completed.process_messages),
-        RoundStage::Tally => state.expected.tally.saturating_sub(state.completed.tally),
+impl OnlinePublicOutput {
+    fn stage(&self) -> RoundStage {
+        match self {
+            Self::ProcessDeactivate(_) => RoundStage::ProcessDeactivate,
+            Self::AddNewKey(_) => RoundStage::AddNewKey,
+        }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct AggregatePublicSummary {
-    stage: RoundStage,
-    child_count: u32,
+#[derive(Debug, Clone)]
+struct ProcessDeactivateSummary {
+    new_deactivate_root: Binary,
+    coord_pub_key_hash: Binary,
+    batch_start_hash: Binary,
+    batch_end_hash: Binary,
+    current_deactivate_commitment: Binary,
+    new_deactivate_commitment: Binary,
+    current_state_root: Binary,
+    expected_poll_id: Binary,
 }
 
-fn decode_aggregate_public_output(bytes: &[u8]) -> Result<AggregatePublicSummary, ContractError> {
-    if bytes.len() < AGGREGATE_MAGIC.len() + 1 + 4 {
-        return Err(ContractError::InvalidAggregatePublicOutput {
-            reason: "too short".to_string(),
+#[derive(Debug, Clone)]
+struct AddNewKeySummary {
+    deactivate_root: Binary,
+    coord_pub_key_hash: Binary,
+    nullifier: Binary,
+    poll_id: Binary,
+}
+
+fn decode_online_public_output(bytes: &[u8]) -> Result<OnlinePublicOutput, ContractError> {
+    if bytes.len() < PUBLIC_MAGIC.len() + 1 || &bytes[..PUBLIC_MAGIC.len()] != PUBLIC_MAGIC {
+        return Err(ContractError::InvalidPublicOutput {
+            reason: "invalid base public output magic".to_string(),
         });
     }
-    if &bytes[..AGGREGATE_MAGIC.len()] != AGGREGATE_MAGIC {
-        return Err(ContractError::InvalidAggregatePublicOutput {
-            reason: "invalid magic".to_string(),
-        });
-    }
-
-    let tag = bytes[AGGREGATE_MAGIC.len()];
+    let tag = bytes[PUBLIC_MAGIC.len()];
     let expected_len = match tag {
-        AGGREGATE_TAG_PROCESS_MESSAGES => PROCESS_MESSAGES_AGGREGATE_PUBLIC_LEN,
-        AGGREGATE_TAG_TALLY => TALLY_AGGREGATE_PUBLIC_LEN,
+        TAG_PROCESS_DEACTIVATE => PROCESS_DEACTIVATE_PUBLIC_LEN,
+        TAG_ADD_NEW_KEY => ADD_NEW_KEY_PUBLIC_LEN,
         _ => {
-            return Err(ContractError::InvalidAggregatePublicOutput {
-                reason: format!("unknown tag {tag}"),
-            });
+            return Err(ContractError::InvalidPublicOutput {
+                reason: format!("unsupported online public output tag {tag}"),
+            })
         }
     };
     if bytes.len() != expected_len {
-        return Err(ContractError::InvalidAggregatePublicOutput {
+        return Err(ContractError::InvalidPublicOutput {
             reason: format!("invalid length {}, expected {expected_len}", bytes.len()),
         });
     }
 
-    let child_count_offset = AGGREGATE_MAGIC.len() + 1;
-    let child_count = u32::from_be_bytes(
-        bytes[child_count_offset..child_count_offset + 4]
-            .try_into()
-            .expect("slice length is exactly u32"),
-    );
-    let stage = match tag {
-        AGGREGATE_TAG_PROCESS_MESSAGES => RoundStage::ProcessMessages,
-        AGGREGATE_TAG_TALLY => RoundStage::Tally,
+    let mut offset = PUBLIC_MAGIC.len() + 1;
+    let _input_hash = read_digest(bytes, &mut offset);
+    Ok(match tag {
+        TAG_PROCESS_DEACTIVATE => OnlinePublicOutput::ProcessDeactivate(ProcessDeactivateSummary {
+            new_deactivate_root: read_digest(bytes, &mut offset),
+            coord_pub_key_hash: read_digest(bytes, &mut offset),
+            batch_start_hash: read_digest(bytes, &mut offset),
+            batch_end_hash: read_digest(bytes, &mut offset),
+            current_deactivate_commitment: read_digest(bytes, &mut offset),
+            new_deactivate_commitment: read_digest(bytes, &mut offset),
+            current_state_root: read_digest(bytes, &mut offset),
+            expected_poll_id: read_digest(bytes, &mut offset),
+        }),
+        TAG_ADD_NEW_KEY => {
+            let deactivate_root = read_digest(bytes, &mut offset);
+            let coord_pub_key_hash = read_digest(bytes, &mut offset);
+            let nullifier = read_digest(bytes, &mut offset);
+            for _ in 0..5 {
+                let _ = read_digest(bytes, &mut offset);
+            }
+            let poll_id = read_digest(bytes, &mut offset);
+            OnlinePublicOutput::AddNewKey(AddNewKeySummary {
+                deactivate_root,
+                coord_pub_key_hash,
+                nullifier,
+                poll_id,
+            })
+        }
         _ => unreachable!("tag checked above"),
-    };
-
-    Ok(AggregatePublicSummary { stage, child_count })
+    })
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct RoundRootPublicSummary {
+#[derive(Debug, Clone)]
+struct FinalizationPublicSummary {
     direct_child_count: u32,
     total_leaf_count: u32,
     process_messages_leaf_count: u32,
     tally_leaf_count: u32,
-    base_program_vkey_digest: [u8; 32],
-    tree_program_vkey_digest: [u8; 32],
-    coord_pub_key_hash: [u8; 32],
-    expected_poll_id: [u8; 32],
+    base_program_vkey_digest: Binary,
+    tree_program_vkey_digest: Binary,
+    coord_pub_key_hash: Binary,
+    expected_poll_id: Binary,
+    initial_batch_start_hash: Binary,
+    final_batch_end_hash: Binary,
+    initial_state_commitment: Binary,
+    deactivate_commitment: Binary,
 }
 
-fn decode_round_root_public_output(bytes: &[u8]) -> Result<RoundRootPublicSummary, ContractError> {
-    if bytes.len() != TREE_ROUND_ROOT_PUBLIC_LEN {
-        return Err(ContractError::InvalidRoundRootPublicOutput {
+fn decode_finalization_public_output(
+    bytes: &[u8],
+) -> Result<FinalizationPublicSummary, ContractError> {
+    if bytes.len() != FINALIZATION_ROOT_PUBLIC_LEN {
+        return Err(ContractError::InvalidPublicOutput {
             reason: format!(
-                "invalid length {}, expected {TREE_ROUND_ROOT_PUBLIC_LEN}",
+                "invalid finalization length {}, expected {FINALIZATION_ROOT_PUBLIC_LEN}",
                 bytes.len()
             ),
         });
     }
-    if &bytes[..TREE_AGGREGATE_MAGIC.len()] != TREE_AGGREGATE_MAGIC {
-        return Err(ContractError::InvalidRoundRootPublicOutput {
-            reason: "invalid magic".to_string(),
+    if &bytes[..TREE_MAGIC.len()] != TREE_MAGIC || bytes[TREE_MAGIC.len()] != TAG_FINALIZATION_ROOT
+    {
+        return Err(ContractError::InvalidPublicOutput {
+            reason: "invalid finalization root magic or tag".to_string(),
         });
     }
-    if bytes[TREE_AGGREGATE_MAGIC.len()] != TREE_TAG_ROUND_ROOT {
-        return Err(ContractError::InvalidRoundRootPublicOutput {
-            reason: format!(
-                "invalid tag {}, expected {TREE_TAG_ROUND_ROOT}",
-                bytes[TREE_AGGREGATE_MAGIC.len()]
-            ),
-        });
-    }
-
-    let mut offset = TREE_AGGREGATE_MAGIC.len() + 1;
+    let mut offset = TREE_MAGIC.len() + 1;
     let direct_child_count = read_u32(bytes, &mut offset);
     let total_leaf_count = read_u32(bytes, &mut offset);
     let process_messages_leaf_count = read_u32(bytes, &mut offset);
@@ -392,8 +498,13 @@ fn decode_round_root_public_output(bytes: &[u8]) -> Result<RoundRootPublicSummar
     let tree_program_vkey_digest = read_digest(bytes, &mut offset);
     let coord_pub_key_hash = read_digest(bytes, &mut offset);
     let expected_poll_id = read_digest(bytes, &mut offset);
+    let initial_batch_start_hash = read_digest(bytes, &mut offset);
+    let final_batch_end_hash = read_digest(bytes, &mut offset);
+    let initial_state_commitment = read_digest(bytes, &mut offset);
+    let _final_state_commitment = read_digest(bytes, &mut offset);
+    let deactivate_commitment = read_digest(bytes, &mut offset);
 
-    Ok(RoundRootPublicSummary {
+    Ok(FinalizationPublicSummary {
         direct_child_count,
         total_leaf_count,
         process_messages_leaf_count,
@@ -402,29 +513,28 @@ fn decode_round_root_public_output(bytes: &[u8]) -> Result<RoundRootPublicSummar
         tree_program_vkey_digest,
         coord_pub_key_hash,
         expected_poll_id,
+        initial_batch_start_hash,
+        final_batch_end_hash,
+        initial_state_commitment,
+        deactivate_commitment,
     })
 }
 
 fn read_u32(bytes: &[u8], offset: &mut usize) -> u32 {
-    let value = u32::from_be_bytes(
-        bytes[*offset..*offset + 4]
-            .try_into()
-            .expect("round-root length was validated"),
-    );
+    let value = u32::from_be_bytes(bytes[*offset..*offset + 4].try_into().unwrap());
     *offset += 4;
     value
 }
 
-fn read_digest(bytes: &[u8], offset: &mut usize) -> [u8; 32] {
-    let value = bytes[*offset..*offset + 32]
-        .try_into()
-        .expect("round-root length was validated");
+fn read_digest(bytes: &[u8], offset: &mut usize) -> Binary {
+    let value = Binary::from(bytes[*offset..*offset + 32].to_vec());
     *offset += 32;
     value
 }
 
-fn validate_tree_verifier_config(config: &TreeVerifierConfig) -> Result<(), ContractError> {
+fn validate_verifier_config(config: &VerifierConfig) -> Result<(), ContractError> {
     for (field, value) in [
+        ("base_vkey_hash", &config.base_vkey_hash),
         ("tree_vkey_hash", &config.tree_vkey_hash),
         ("base_program_vkey_digest", &config.base_program_vkey_digest),
         ("tree_program_vkey_digest", &config.tree_program_vkey_digest),
@@ -434,20 +544,44 @@ fn validate_tree_verifier_config(config: &TreeVerifierConfig) -> Result<(), Cont
             &config.expected_coord_pub_key_hash,
         ),
     ] {
-        if value.len() != 32 {
-            return Err(ContractError::InvalidTreeVerifierConfig {
-                field: field.to_string(),
-                actual: value.len(),
-            });
-        }
+        require_len(field, value)?;
     }
     Ok(())
 }
 
-fn require_identity(field: &str, actual: &[u8; 32], expected: &[u8]) -> Result<(), ContractError> {
-    if actual.as_slice() != expected {
-        return Err(ContractError::RoundRootIdentityMismatch {
+fn require_len(field: &str, value: &[u8]) -> Result<(), ContractError> {
+    if value.len() != 32 {
+        return Err(ContractError::InvalidConfigLength {
             field: field.to_string(),
+            actual: value.len(),
+        });
+    }
+    Ok(())
+}
+
+fn require_identity(field: &str, actual: &[u8], expected: &[u8]) -> Result<(), ContractError> {
+    if actual != expected {
+        return Err(ContractError::IdentityMismatch {
+            field: field.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn require_transition(field: &str, actual: &[u8], expected: &[u8]) -> Result<(), ContractError> {
+    if actual != expected {
+        return Err(ContractError::DeactivateTransitionMismatch {
+            field: field.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn require_phase(state: &StoredRoundState, expected: RoundPhase) -> Result<(), ContractError> {
+    if state.phase != expected {
+        return Err(ContractError::PhaseMismatch {
+            expected,
+            actual: state.phase.clone(),
         });
     }
     Ok(())
@@ -458,13 +592,20 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::RoundState {} => {
             let state = ROUND_STATE.load(deps.storage)?;
-            let next_stage = state.next_stage();
-            let is_complete = next_stage.is_none();
+            let is_complete = state.is_complete();
             to_json_binary(&RoundStateResponse {
                 round_id: state.round_id,
+                operator: state.operator.to_string(),
+                phase: state.phase.clone(),
                 expected: state.expected,
                 completed: state.completed,
-                next_stage,
+                online_state: OnlineStateResponse {
+                    current_deactivate_commitment: state.online.current_deactivate_commitment,
+                    deactivate_batch_end_hash: state.online.deactivate_batch_end_hash,
+                    latest_deactivate_root: state.online.latest_deactivate_root,
+                    latest_state_root: state.online.latest_state_root,
+                },
+                checkpoint: state.checkpoint,
                 is_complete,
                 verified_proofs: state.verified_proofs,
             })
@@ -475,406 +616,12 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::msg::RoundPlan;
+    use crate::msg::InitialOnlineState;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
 
-    fn plan() -> RoundPlan {
-        RoundPlan {
-            process_deactivate: 1,
-            add_new_key: 1,
-            process_messages: 2,
-            tally: 2,
-        }
-    }
-
-    #[test]
-    fn instantiate_sets_initial_round_state() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: Some("round-1".to_string()),
-                expected: plan(),
-                tree_verifier: None,
-            },
-        )
-        .unwrap();
-
-        let response = query(deps.as_ref(), mock_env(), QueryMsg::RoundState {}).unwrap();
-        let state: RoundStateResponse = cosmwasm_std::from_json(response).unwrap();
-        assert_eq!(state.round_id, "round-1");
-        assert_eq!(state.next_stage, Some(RoundStage::ProcessDeactivate));
-        assert!(!state.is_complete);
-    }
-
-    #[test]
-    fn empty_round_plan_is_rejected() {
-        let mut deps = mock_dependencies();
-        let err = instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: RoundPlan {
-                    process_deactivate: 0,
-                    add_new_key: 0,
-                    process_messages: 0,
-                    tally: 0,
-                },
-                tree_verifier: None,
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(err, ContractError::EmptyRoundPlan));
-    }
-
-    #[test]
-    fn wrong_stage_order_is_rejected_before_verification() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: None,
-            },
-        )
-        .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedStage {
-                stage: RoundStage::ProcessMessages,
-                proof: Binary::default(),
-                public_values: Binary::default(),
-                vkey_hash: Binary::default(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, ContractError::StageOutOfOrder { .. }));
-    }
-
-    #[test]
-    fn empty_proof_is_rejected_for_expected_stage() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: None,
-            },
-        )
-        .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedStage {
-                stage: RoundStage::ProcessDeactivate,
-                proof: Binary::default(),
-                public_values: Binary::default(),
-                vkey_hash: Binary::default(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, ContractError::CompressedVerification { .. }));
-    }
-
-    #[test]
-    fn aggregate_rejects_unsupported_stage_before_verification() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: None,
-            },
-        )
-        .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedAggregateStage {
-                stage: RoundStage::ProcessDeactivate,
-                proof: Binary::default(),
-                public_values: aggregate_public_values(RoundStage::ProcessMessages, 1),
-                vkey_hash: Binary::default(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(matches!(
-            err,
-            ContractError::UnsupportedAggregateStage {
-                stage: RoundStage::ProcessDeactivate
-            }
-        ));
-    }
-
-    #[test]
-    fn aggregate_rejects_stage_mismatch_before_verification() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: Some("aggregate-mismatch".to_string()),
-                expected: RoundPlan {
-                    process_deactivate: 0,
-                    add_new_key: 0,
-                    process_messages: 1,
-                    tally: 1,
-                },
-                tree_verifier: None,
-            },
-        )
-        .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedAggregateStage {
-                stage: RoundStage::ProcessMessages,
-                proof: Binary::default(),
-                public_values: aggregate_public_values(RoundStage::Tally, 1),
-                vkey_hash: Binary::default(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, ContractError::AggregateStageMismatch { .. }));
-    }
-
-    #[test]
-    fn aggregate_rejects_child_count_larger_than_remaining_before_verification() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: Some("aggregate-too-large".to_string()),
-                expected: RoundPlan {
-                    process_deactivate: 0,
-                    add_new_key: 0,
-                    process_messages: 1,
-                    tally: 0,
-                },
-                tree_verifier: None,
-            },
-        )
-        .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedAggregateStage {
-                stage: RoundStage::ProcessMessages,
-                proof: Binary::default(),
-                public_values: aggregate_public_values(RoundStage::ProcessMessages, 2),
-                vkey_hash: Binary::default(),
-            },
-        )
-        .unwrap_err();
-
-        assert!(matches!(
-            err,
-            ContractError::AggregateChildCountTooLarge {
-                remaining: 1,
-                child_count: 2
-            }
-        ));
-    }
-
-    fn aggregate_public_values(stage: RoundStage, child_count: u32) -> Binary {
-        let (tag, digest_count, extra_u32_count) = match stage {
-            RoundStage::ProcessMessages => (AGGREGATE_TAG_PROCESS_MESSAGES, 9usize, 0usize),
-            RoundStage::Tally => (AGGREGATE_TAG_TALLY, 4usize, 2usize),
-            RoundStage::ProcessDeactivate | RoundStage::AddNewKey => {
-                (AGGREGATE_TAG_PROCESS_MESSAGES, 9usize, 0usize)
-            }
-        };
-        let mut out = Vec::new();
-        out.extend_from_slice(AGGREGATE_MAGIC);
-        out.push(tag);
-        out.extend_from_slice(&child_count.to_be_bytes());
-        for _ in 0..extra_u32_count {
-            out.extend_from_slice(&0u32.to_be_bytes());
-        }
-        out.resize(out.len() + digest_count * 32, 0u8);
-        Binary::from(out)
-    }
-
-    #[test]
-    fn invalid_tree_verifier_config_is_rejected_at_instantiate() {
-        let mut deps = mock_dependencies();
-        let mut config = tree_verifier_config(7);
-        config.tree_vkey_hash = Binary::from(vec![7u8; 31]);
-        let err = instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: Some(config),
-            },
-        )
-        .unwrap_err();
-
-        assert!(matches!(
-            err,
-            ContractError::InvalidTreeVerifierConfig { actual: 31, .. }
-        ));
-    }
-
-    #[test]
-    fn round_root_requires_pinned_verifier_config() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: None,
-            },
-        )
-        .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedRoundRoot {
-                proof: Binary::default(),
-                public_values: round_root_public_values(2, 2, 7),
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(err, ContractError::MissingTreeVerifierConfig));
-    }
-
-    #[test]
-    fn round_root_rejects_leaf_count_mismatch_before_verification() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: Some(tree_verifier_config(7)),
-            },
-        )
-        .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedRoundRoot {
-                proof: Binary::default(),
-                public_values: round_root_public_values(3, 2, 7),
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(err, ContractError::RoundRootPlanMismatch { .. }));
-    }
-
-    #[test]
-    fn round_root_rejects_program_identity_mismatch_before_verification() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: Some(tree_verifier_config(7)),
-            },
-        )
-        .unwrap();
-
-        let mut public_values = round_root_public_values(2, 2, 7).to_vec();
-        public_values[8 + 1 + 6 * 4] = 8;
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedRoundRoot {
-                proof: Binary::default(),
-                public_values: Binary::from(public_values),
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            ContractError::RoundRootIdentityMismatch { field }
-                if field == "base_program_vkey_digest"
-        ));
-    }
-
-    #[test]
-    fn round_root_is_rejected_after_partial_progress() {
-        let mut deps = mock_dependencies();
-        instantiate(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            InstantiateMsg {
-                round_id: None,
-                expected: plan(),
-                tree_verifier: Some(tree_verifier_config(7)),
-            },
-        )
-        .unwrap();
-        ROUND_STATE
-            .update(deps.as_mut().storage, |mut state| -> StdResult<_> {
-                state.completed.process_deactivate = 1;
-                Ok(state)
-            })
-            .unwrap();
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("sender", &[]),
-            ExecuteMsg::VerifyCompressedRoundRoot {
-                proof: Binary::default(),
-                public_values: round_root_public_values(2, 2, 7),
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(err, ContractError::RoundAlreadyStarted));
-    }
-
-    fn tree_verifier_config(fill: u8) -> TreeVerifierConfig {
-        TreeVerifierConfig {
+    fn verifier(fill: u8) -> VerifierConfig {
+        VerifierConfig {
+            base_vkey_hash: Binary::from(vec![fill; 32]),
             tree_vkey_hash: Binary::from(vec![fill; 32]),
             base_program_vkey_digest: Binary::from(vec![fill; 32]),
             tree_program_vkey_digest: Binary::from(vec![fill; 32]),
@@ -883,32 +630,229 @@ mod tests {
         }
     }
 
-    fn round_root_public_values(
-        process_messages_leaf_count: u32,
-        tally_leaf_count: u32,
-        fill: u8,
+    fn instantiate_msg() -> InstantiateMsg {
+        InstantiateMsg {
+            round_id: Some("round-1".to_string()),
+            verifier: verifier(7),
+            initial_online_state: InitialOnlineState {
+                current_deactivate_commitment: Binary::from(vec![1; 32]),
+                deactivate_batch_start_hash: Binary::from(vec![2; 32]),
+            },
+        }
+    }
+
+    #[test]
+    fn instantiate_opens_round_and_pins_operator() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("operator", &[]),
+            instantiate_msg(),
+        )
+        .unwrap();
+        let response = query(deps.as_ref(), mock_env(), QueryMsg::RoundState {}).unwrap();
+        let state: RoundStateResponse = cosmwasm_std::from_json(response).unwrap();
+        assert_eq!(state.operator, "operator");
+        assert_eq!(state.phase, RoundPhase::Open);
+        assert!(!state.is_complete);
+    }
+
+    #[test]
+    fn close_requires_operator_and_sets_post_round_plan() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("operator", &[]),
+            instantiate_msg(),
+        )
+        .unwrap();
+        let msg = ExecuteMsg::CloseRound {
+            process_messages_count: 10,
+            tally_count: 11,
+            initial_state_commitment: Binary::from(vec![3; 32]),
+            message_batch_start_hash: Binary::from(vec![4; 32]),
+            message_batch_end_hash: Binary::from(vec![5; 32]),
+        };
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("other", &[]),
+            msg.clone(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::Unauthorized));
+        execute(deps.as_mut(), mock_env(), mock_info("operator", &[]), msg).unwrap();
+        let state = ROUND_STATE.load(deps.as_ref().storage).unwrap();
+        assert_eq!(state.phase, RoundPhase::Closed);
+        assert_eq!(state.expected.process_messages, 10);
+        assert_eq!(state.expected.tally, 11);
+    }
+
+    #[test]
+    fn online_decoder_rejects_non_online_stage() {
+        let mut bytes = Vec::from(PUBLIC_MAGIC);
+        bytes.push(1);
+        bytes.resize(8 + 1 + 9 * 32, 0);
+        let err = decode_online_public_output(&bytes).unwrap_err();
+        assert!(matches!(err, ContractError::InvalidPublicOutput { .. }));
+    }
+
+    #[test]
+    fn invalid_base_vkey_length_is_rejected() {
+        let mut deps = mock_dependencies();
+        let mut msg = instantiate_msg();
+        msg.verifier.base_vkey_hash = Binary::from(vec![0; 31]);
+        let err =
+            instantiate(deps.as_mut(), mock_env(), mock_info("operator", &[]), msg).unwrap_err();
+        assert!(matches!(
+            err,
+            ContractError::InvalidConfigLength { actual: 31, .. }
+        ));
+    }
+
+    #[test]
+    fn deactivate_transition_is_checked_before_proof_verification() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("operator", &[]),
+            instantiate_msg(),
+        )
+        .unwrap();
+        let public_values = process_deactivate_public_values(9, 2, 7, 7);
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("operator", &[]),
+            ExecuteMsg::VerifyOnlineProof {
+                stage: RoundStage::ProcessDeactivate,
+                proof: Binary::default(),
+                public_values,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ContractError::DeactivateTransitionMismatch { field }
+                if field == "current_deactivate_commitment"
+        ));
+    }
+
+    #[test]
+    fn add_new_key_requires_a_verified_deactivate_root() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("operator", &[]),
+            instantiate_msg(),
+        )
+        .unwrap();
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("relayer", &[]),
+            ExecuteMsg::VerifyOnlineProof {
+                stage: RoundStage::AddNewKey,
+                proof: Binary::default(),
+                public_values: add_new_key_public_values(9, 8, 7),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::UnknownDeactivateRoot));
+    }
+
+    #[test]
+    fn finalization_checkpoint_is_checked_before_proof_verification() {
+        let mut deps = mock_dependencies();
+        instantiate(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("operator", &[]),
+            instantiate_msg(),
+        )
+        .unwrap();
+        ROUND_STATE
+            .update(deps.as_mut().storage, |mut state| -> StdResult<_> {
+                state.completed.process_deactivate = 1;
+                state.completed.add_new_key = 1;
+                state.expected.process_deactivate = 1;
+                state.expected.add_new_key = 1;
+                state.expected.process_messages = 10;
+                state.expected.tally = 11;
+                state.phase = RoundPhase::Closed;
+                state.checkpoint = Some(RoundCheckpoint {
+                    initial_state_commitment: Binary::from(vec![3; 32]),
+                    message_batch_start_hash: Binary::from(vec![4; 32]),
+                    message_batch_end_hash: Binary::from(vec![5; 32]),
+                    deactivate_commitment: Binary::from(vec![1; 32]),
+                });
+                Ok(state)
+            })
+            .unwrap();
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("relayer", &[]),
+            ExecuteMsg::VerifyCompressedFinalizationRoot {
+                proof: Binary::default(),
+                public_values: finalization_public_values(9),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ContractError::FinalizationCheckpointMismatch { field }
+                if field == "initial_state_commitment"
+        ));
+    }
+
+    fn process_deactivate_public_values(
+        current_commitment: u8,
+        batch_start: u8,
+        coord: u8,
+        poll: u8,
     ) -> Binary {
-        let mut out = Vec::with_capacity(TREE_ROUND_ROOT_PUBLIC_LEN);
-        out.extend_from_slice(TREE_AGGREGATE_MAGIC);
-        out.push(TREE_TAG_ROUND_ROOT);
-        for value in [
-            4,
-            2 + process_messages_leaf_count + tally_leaf_count,
-            process_messages_leaf_count,
-            tally_leaf_count,
-            1,
-            1,
+        let mut out = Vec::from(PUBLIC_MAGIC);
+        out.push(TAG_PROCESS_DEACTIVATE);
+        for fill in [
+            0,
+            6,
+            coord,
+            batch_start,
+            10,
+            current_commitment,
+            11,
+            12,
+            poll,
         ] {
+            out.extend_from_slice(&[fill; 32]);
+        }
+        Binary::from(out)
+    }
+
+    fn add_new_key_public_values(root: u8, nullifier: u8, identity: u8) -> Binary {
+        let mut out = Vec::from(PUBLIC_MAGIC);
+        out.push(TAG_ADD_NEW_KEY);
+        for fill in [0, root, identity, nullifier, 0, 0, 0, 0, 0, identity] {
+            out.extend_from_slice(&[fill; 32]);
+        }
+        Binary::from(out)
+    }
+
+    fn finalization_public_values(initial_state: u8) -> Binary {
+        let mut out = Vec::from(TREE_MAGIC);
+        out.push(TAG_FINALIZATION_ROOT);
+        for value in [2u32, 21, 10, 11, 2, 2] {
             out.extend_from_slice(&value.to_be_bytes());
         }
-        out.extend_from_slice(&[fill; 32]);
-        out.extend_from_slice(&[fill; 32]);
-        out.extend_from_slice(&[fill; 32]);
-        out.extend_from_slice(&[fill; 32]);
-        for _ in 0..11 {
-            out.extend_from_slice(&[0u8; 32]);
+        for fill in [7, 7, 7, 7, 4, 5, initial_state, 0, 1, 0, 0, 0, 0, 0] {
+            out.extend_from_slice(&[fill; 32]);
         }
-        assert_eq!(out.len(), TREE_ROUND_ROOT_PUBLIC_LEN);
+        assert_eq!(out.len(), FINALIZATION_ROOT_PUBLIC_LEN);
         Binary::from(out)
     }
 }

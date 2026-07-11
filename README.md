@@ -27,7 +27,7 @@ crates/
   proof-sp1-program/     SP1 guest program entrypoint.
   proof-sp1-host/        SP1 prove/execute/verify CLI.
   proof-sp1-tree-program/SP1 recursive tree guest with fixed fan-in 5.
-  proof-sp1-tree-host/   Streaming tree scheduler and final round-root CLI.
+  proof-sp1-tree-host/   Stage-tree scheduler and post-round finalization CLI.
   cosmwasm-sp1-verifier/ CosmWasm verifier PoC for SP1 Groth16 and compressed proofs.
 configs/
   cargo-risc0-native-patches.toml
@@ -61,7 +61,8 @@ cargo check -p amaci-proof-sp1-host
 cargo check -p amaci-proof-sp1-tree-host
 ```
 
-Hierarchical SP1 aggregation and the one-proof CosmWasm round path are
+Hierarchical SP1 aggregation, online key lifecycle verification and the
+one-proof post-round CosmWasm finalization path are
 documented in [`docs/sp1_tree_aggregation.md`](docs/sp1_tree_aggregation.md).
 The larger `3-1-1-5` benchmark uses 50 signups, 50 messages and 51 final state
 leaves; its proving and E2E commands are in

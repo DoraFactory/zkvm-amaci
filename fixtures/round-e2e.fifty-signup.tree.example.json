@@ -22,7 +22,8 @@
   "uploadGas": "auto",
   "instantiateGas": "auto",
   "executeGas": "300000000",
-  "treeVerifierPath": "sp1-proofs/fifty-signup-tree/contract-config.json",
+  "verifierPath": "sp1-proofs/fifty-signup-tree/contract-config.json",
+  "checkpointPath": "sp1-proofs/fifty-signup-tree/close-checkpoint.json",
   "expected": {
     "process_deactivate": 1,
     "add_new_key": 1,
@@ -31,10 +32,22 @@
   },
   "stages": [
     {
-      "label": "round_root",
-      "stage": "round_root",
-      "memo": "verify fifty-signup tree round root",
-      "msgPath": "sp1-proofs/fifty-signup-tree/round-root.verify-compressed.msg.json"
+      "label": "process_deactivate",
+      "stage": "process_deactivate",
+      "memo": "verify online process deactivate",
+      "msgPath": "sp1-proofs/fifty-signup-process-deactivate.verify-compressed.msg.json"
+    },
+    {
+      "label": "add_new_key",
+      "stage": "add_new_key",
+      "memo": "verify online add new key",
+      "msgPath": "sp1-proofs/fifty-signup-add-new-key.verify-compressed.msg.json"
+    },
+    {
+      "label": "finalization_root",
+      "stage": "finalization_root",
+      "memo": "verify fifty-signup post-round finalization root",
+      "msgPath": "sp1-proofs/fifty-signup-tree/finalization-root.verify-compressed.msg.json"
     }
   ]
 }

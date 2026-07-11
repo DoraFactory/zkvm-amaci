@@ -313,6 +313,10 @@ fn five_signup_round_fixture_executes_and_links_public_state() {
 
     assert_eq!(final_raw_results, fixture.expected_raw_results);
     assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
+    assert_eq!(
+        deactivate.new_deactivate_commitment,
+        messages_full.deactivate_commitment
+    );
     assert_eq!(messages_full.new_state_commitment, tally_0.state_commitment);
     assert_eq!(
         tally_0.new_tally_commitment,
@@ -359,6 +363,13 @@ fn fifteen_signup_round_fixture_executes_and_links_aggregated_batches() {
         panic!("stage 1 must be add new key");
     };
     assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
+    let PublicOutput::ProcessMessages(first_messages) = &outputs[2] else {
+        panic!("stage 2 must be process messages");
+    };
+    assert_eq!(
+        deactivate.new_deactivate_commitment,
+        first_messages.deactivate_commitment
+    );
 
     let process_aggregate =
         build_process_messages_aggregate_public_output(&encoded_outputs[2..5]).unwrap();
@@ -462,6 +473,13 @@ fn fifty_signup_round_fixture_executes_depth_three_batches() {
         panic!("stage 1 must be add new key");
     };
     assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
+    let PublicOutput::ProcessMessages(first_messages) = &outputs[2] else {
+        panic!("stage 2 must be process messages");
+    };
+    assert_eq!(
+        deactivate.new_deactivate_commitment,
+        first_messages.deactivate_commitment
+    );
 
     let process_aggregate =
         build_process_messages_aggregate_public_output(&encoded_outputs[2..12]).unwrap();

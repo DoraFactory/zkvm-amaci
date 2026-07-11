@@ -83,51 +83,55 @@ function feeForGas(gas, gasPricePeaka, denom) {
 }
 
 function wrapStageMessage(stage, verifyMsg) {
-  if (verifyMsg.verify_compressed_round_root) {
-    const { proof, public_values } = verifyMsg.verify_compressed_round_root;
+  if (verifyMsg.verify_compressed_finalization_root) {
+    const { proof, public_values } = verifyMsg.verify_compressed_finalization_root;
     return {
-      verify_compressed_round_root: {
+      verify_compressed_finalization_root: {
         proof,
         public_values,
-      },
-    };
-  }
-  if (verifyMsg.verify_compressed_aggregate) {
-    const { proof, public_values, vkey_hash } = verifyMsg.verify_compressed_aggregate;
-    return {
-      verify_compressed_aggregate_stage: {
-        stage,
-        proof,
-        public_values,
-        vkey_hash,
       },
     };
   }
   if (verifyMsg.verify_compressed) {
-    const { proof, public_values, vkey_hash } = verifyMsg.verify_compressed;
+    const { proof, public_values } = verifyMsg.verify_compressed;
     return {
-      verify_compressed_stage: {
+      verify_online_proof: {
         stage,
         proof,
         public_values,
-        vkey_hash,
       },
     };
   }
   throw new Error(
-    `stage ${stage} msg must contain verify_compressed, verify_compressed_aggregate, or verify_compressed_round_root`,
+    `stage ${stage} msg must contain verify_compressed or verify_compressed_finalization_root`,
   );
 }
 
-function readTreeVerifier(manifest, manifestDir) {
-  if (manifest.treeVerifier && manifest.treeVerifierPath) {
-    throw new Error("set only one of treeVerifier or treeVerifierPath");
+function readVerifier(manifest, manifestDir) {
+  if (manifest.verifier && manifest.verifierPath) {
+    throw new Error("set only one of verifier or verifierPath");
   }
-  if (manifest.treeVerifier) return manifest.treeVerifier;
-  if (manifest.treeVerifierPath) {
-    return readJson(resolveInputPath(manifestDir, manifest.treeVerifierPath));
+  if (manifest.verifier) return manifest.verifier;
+  if (manifest.verifierPath) {
+    return readJson(resolveInputPath(manifestDir, manifest.verifierPath));
   }
-  return undefined;
+  throw new Error("manifest requires verifier or verifierPath");
+}
+
+function initialOnlineState(stageConfigs, manifestDir) {
+  const deactivate = stageConfigs.find((stage) => stage.stage === "process_deactivate");
+  if (!deactivate) throw new Error("manifest requires a process_deactivate online stage");
+  const verifyMsg = readJson(resolveInputPath(manifestDir, deactivate.msgPath));
+  const encoded = verifyMsg.verify_compressed?.public_values;
+  if (!encoded) throw new Error("process_deactivate message has no compressed public values");
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.length !== 297 || bytes.subarray(0, 8).toString() !== "AMACIPU1" || bytes[8] !== 3) {
+    throw new Error("process_deactivate public values have an invalid codec header");
+  }
+  return {
+    current_deactivate_commitment: bytes.subarray(9 + 5 * 32, 9 + 6 * 32).toString("base64"),
+    deactivate_batch_start_hash: bytes.subarray(9 + 3 * 32, 9 + 4 * 32).toString("base64"),
+  };
 }
 
 function expandStageConfigs(manifest) {
@@ -193,6 +197,12 @@ async function main() {
     manifest.outputDir ?? `round-e2e-results/${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`,
   );
   mkdirSync(outDir, { recursive: true });
+  const stageConfigs = expandStageConfigs(manifest);
+  const onlineStages = stageConfigs.filter((stage) => stage.stage !== "finalization_root");
+  const finalizationStages = stageConfigs.filter((stage) => stage.stage === "finalization_root");
+  if (finalizationStages.length !== 1) {
+    throw new Error("manifest requires exactly one finalization_root stage");
+  }
 
   const wallet = await DirectSecp256k1HdWallet.fromMnemonic(readMnemonic(manifest, manifestDir), {
     prefix,
@@ -220,10 +230,9 @@ async function main() {
 
   const instantiateMsg = {
     round_id: manifest.roundId ?? "zkvm-amaci-round-e2e",
-    expected: manifest.expected,
+    verifier: readVerifier(manifest, manifestDir),
+    initial_online_state: initialOnlineState(onlineStages, manifestDir),
   };
-  const treeVerifier = readTreeVerifier(manifest, manifestDir);
-  if (treeVerifier) instantiateMsg.tree_verifier = treeVerifier;
   const instantiateFee =
     manifest.instantiateGas === "auto" || manifest.instantiateGas === undefined
       ? "auto"
@@ -242,7 +251,7 @@ async function main() {
     }),
   );
 
-  for (const stageConfig of expandStageConfigs(manifest)) {
+  const executeStage = async (stageConfig) => {
     const msgPath = resolveInputPath(manifestDir, stageConfig.msgPath);
     const verifyMsg = readJson(msgPath);
     const executeMsg = wrapStageMessage(stageConfig.stage, verifyMsg);
@@ -265,7 +274,45 @@ async function main() {
         msgBytes: Buffer.byteLength(JSON.stringify(executeMsg)),
       }),
     );
+  };
+
+  for (const stageConfig of onlineStages) {
+    if (!["process_deactivate", "add_new_key"].includes(stageConfig.stage)) {
+      throw new Error(`unsupported online stage ${stageConfig.stage}`);
+    }
+    await executeStage(stageConfig);
   }
+
+  if (!manifest.checkpointPath) throw new Error("manifest requires checkpointPath");
+  const checkpointPath = resolveInputPath(manifestDir, manifest.checkpointPath);
+  const closeRound = {
+    process_messages_count: manifest.expected?.process_messages,
+    tally_count: manifest.expected?.tally,
+    ...readJson(checkpointPath),
+  };
+  if (!closeRound.process_messages_count || !closeRound.tally_count) {
+    throw new Error("manifest expected process_messages and tally counts must be positive");
+  }
+  const closeGas = BigInt(manifest.closeGas ?? manifest.executeGas ?? 300_000_000);
+  const closeFee =
+    manifest.closeGas === "auto" || manifest.executeGas === "auto"
+      ? "auto"
+      : feeForGas(closeGas, signGasPricePeaka, denom);
+  const closeResult = await client.execute(
+    account.address,
+    instantiate.contractAddress,
+    { close_round: closeRound },
+    closeFee,
+    manifest.closeMemo ?? "close round and freeze checkpoint",
+  );
+  rows.push(
+    txSummary("close_round", closeResult, costGasPricePeaka, {
+      checkpointPath,
+      msgBytes: Buffer.byteLength(JSON.stringify({ close_round: closeRound })),
+    }),
+  );
+
+  await executeStage(finalizationStages[0]);
 
   const state = await client.queryContractSmart(instantiate.contractAddress, {
     round_state: {},

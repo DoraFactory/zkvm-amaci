@@ -6,7 +6,7 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 base_target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-fifty-target}"
 tree_target_dir="${TREE_TARGET_DIR:-/tmp/zkvm-amaci-sp1-tree-target}"
 force_reprove="${FORCE_REPROVE:-0}"
-base_archive="sp1-proofs/fifty-signup-base-messages.tar.gz"
+online_archive="sp1-proofs/fifty-signup-online-messages.tar.gz"
 suite_summary="metrics/fifty-signup-tree-suite-${stamp}.summary.tsv"
 
 mkdir -p logs metrics sp1-proofs
@@ -81,18 +81,25 @@ verify_existing() {
   cmp -s "$full_verified" "$raw_verified"
 }
 
-message_paths=()
+online_message_paths=()
 for circuit in "${stages[@]}"; do
   if [[ "$force_reprove" != "1" ]] && artifacts_complete "$circuit"; then
-    echo "== resume and verify ${circuit} =="
-    verify_existing "$circuit"
+    echo "== checking cached ${circuit} =="
+    if verify_existing "$circuit"; then
+      echo "== resume ${circuit} =="
+    else
+      echo "== cached proof is incompatible; reproving ${circuit} =="
+      SP1_TARGET_DIR="$base_target_dir" scripts/run_bench.sh sp1-compressed "$circuit"
+    fi
   else
     echo "== proving ${circuit} =="
     SP1_TARGET_DIR="$base_target_dir" scripts/run_bench.sh sp1-compressed "$circuit"
   fi
   local_msg="sp1-proofs/${circuit}.verify-compressed.msg.json"
   scripts/make_cosmwasm_sp1_compressed_msg.sh "$circuit" > "$local_msg"
-  message_paths+=("${circuit}.verify-compressed.msg.json")
+  if [[ "$circuit" == "fifty-signup-process-deactivate" || "$circuit" == "fifty-signup-add-new-key" ]]; then
+    online_message_paths+=("${circuit}.verify-compressed.msg.json")
+  fi
   circuit_metrics="$(latest_metric "metrics/sp1-compressed-${circuit}-*.metrics.txt")"
   printf 'base\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$circuit" \
@@ -104,19 +111,19 @@ for circuit in "${stages[@]}"; do
     >> "$suite_summary"
 done
 
-tar -czf "$base_archive" -C sp1-proofs "${message_paths[@]}"
+tar -czf "$online_archive" -C sp1-proofs "${online_message_paths[@]}"
 
-echo "== building fixed-fan-in tree round =="
-CARGO_TARGET_DIR="$tree_target_dir" scripts/run_sp1_tree_round.sh "$prefix" 10 11
+echo "== building fixed-fan-in post-round finalization tree =="
+CARGO_TARGET_DIR="$tree_target_dir" scripts/run_sp1_tree_finalization.sh "$prefix" 10 11
 tree_metrics="$(latest_metric 'metrics/sp1-tree-fifty-signup-*.metrics.txt')"
-printf 'tree\tround-root\t%s\tmissing\t%s\t%s\t%s\n' \
+printf 'tree\tfinalization-root\t%s\tmissing\t%s\t%s\t%s\n' \
   "${tree_metrics:-missing}" \
   "$(metric_value "$tree_metrics" max_rss_kbytes)" \
   "$(metric_value "$tree_metrics" proof_bytes)" \
   "$(metric_value "$tree_metrics" elapsed_wall)" \
   >> "$suite_summary"
 
-echo "fifty signup SP1 tree E2E artifacts ready"
+echo "fifty signup SP1 online + finalization E2E artifacts ready"
 echo "suite_summary=$suite_summary"
-echo "base_archive=$base_archive"
-echo "tree_archive=sp1-proofs/fifty-signup-tree-round-artifacts.tar.gz"
+echo "online_archive=$online_archive"
+echo "tree_archive=sp1-proofs/fifty-signup-tree-finalization-artifacts.tar.gz"

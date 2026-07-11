@@ -1,7 +1,7 @@
 use cosmwasm_std::StdError;
 use thiserror::Error;
 
-use crate::msg::RoundStage;
+use crate::msg::{RoundPhase, RoundStage};
 
 #[derive(Error, Debug)]
 pub enum ContractError {
@@ -11,48 +11,51 @@ pub enum ContractError {
     #[error("SP1 compressed verification failed: {reason}")]
     CompressedVerification { reason: String },
 
-    #[error("round is already complete")]
-    RoundComplete,
+    #[error("unauthorized operator action")]
+    Unauthorized,
 
-    #[error("stage out of order: expected {expected:?}, got {actual:?}")]
-    StageOutOfOrder {
+    #[error("round phase mismatch: expected {expected:?}, got {actual:?}")]
+    PhaseMismatch {
+        expected: RoundPhase,
+        actual: RoundPhase,
+    },
+
+    #[error("online proof stage is not supported: {stage:?}")]
+    UnsupportedOnlineStage { stage: RoundStage },
+
+    #[error("round plan must include post-round process-messages and tally proofs")]
+    InvalidRoundPlan,
+
+    #[error("online proof counter overflow: {stage:?}")]
+    OnlineCounterOverflow { stage: RoundStage },
+
+    #[error("config field {field} must be 32 bytes, got {actual}")]
+    InvalidConfigLength { field: String, actual: usize },
+
+    #[error("invalid public output: {reason}")]
+    InvalidPublicOutput { reason: String },
+
+    #[error("public output is for {actual:?}, expected {expected:?}")]
+    PublicOutputStageMismatch {
         expected: RoundStage,
         actual: RoundStage,
     },
 
-    #[error("aggregate stage is not supported: {stage:?}")]
-    UnsupportedAggregateStage { stage: RoundStage },
+    #[error("proof identity mismatch: {field}")]
+    IdentityMismatch { field: String },
 
-    #[error("aggregate public output stage mismatch: expected {expected:?}, got {actual:?}")]
-    AggregateStageMismatch {
-        expected: RoundStage,
-        actual: RoundStage,
-    },
+    #[error("deactivate transition mismatch: {field}")]
+    DeactivateTransitionMismatch { field: String },
 
-    #[error("invalid aggregate public output: {reason}")]
-    InvalidAggregatePublicOutput { reason: String },
+    #[error("add-new-key references an unverified deactivate root")]
+    UnknownDeactivateRoot,
 
-    #[error("aggregate child count exceeds remaining stage count: remaining {remaining}, child_count {child_count}")]
-    AggregateChildCountTooLarge { remaining: u32, child_count: u32 },
+    #[error("add-new-key nullifier was already used")]
+    NullifierAlreadyUsed,
 
-    #[error("round plan must include at least one proof stage")]
-    EmptyRoundPlan,
+    #[error("finalization plan mismatch: {reason}")]
+    FinalizationPlanMismatch { reason: String },
 
-    #[error("tree verifier config field {field} must be 32 bytes, got {actual}")]
-    InvalidTreeVerifierConfig { field: String, actual: usize },
-
-    #[error("tree verifier config was not set at instantiate time")]
-    MissingTreeVerifierConfig,
-
-    #[error("tree round root cannot be submitted after round progress has started")]
-    RoundAlreadyStarted,
-
-    #[error("invalid tree round-root public output: {reason}")]
-    InvalidRoundRootPublicOutput { reason: String },
-
-    #[error("tree round-root plan mismatch: {reason}")]
-    RoundRootPlanMismatch { reason: String },
-
-    #[error("tree round-root identity mismatch: {field}")]
-    RoundRootIdentityMismatch { field: String },
+    #[error("finalization checkpoint mismatch: {field}")]
+    FinalizationCheckpointMismatch { field: String },
 }
