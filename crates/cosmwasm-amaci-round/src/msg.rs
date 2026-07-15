@@ -4,6 +4,7 @@ use cosmwasm_std::Binary;
 #[cw_serde]
 pub struct InstantiateMsg {
     pub round_id: Option<String>,
+    pub checkpoint_authority: String,
     pub verifier: VerifierConfig,
     pub initial_online_state: InitialOnlineState,
 }
@@ -97,6 +98,7 @@ pub enum QueryMsg {
 pub struct RoundStateResponse {
     pub round_id: String,
     pub operator: String,
+    pub checkpoint_authority: String,
     pub phase: RoundPhase,
     pub expected: RoundPlan,
     pub completed: RoundPlan,

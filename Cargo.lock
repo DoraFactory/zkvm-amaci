@@ -112,6 +112,7 @@ dependencies = [
 name = "amaci-proof-core"
 version = "0.1.0"
 dependencies = [
+ "hmac",
  "ml-dsa",
  "ml-kem",
  "num-traits",

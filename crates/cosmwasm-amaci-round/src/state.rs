@@ -20,6 +20,7 @@ pub struct OnlineState {
 pub struct StoredRoundState {
     pub round_id: String,
     pub operator: Addr,
+    pub checkpoint_authority: Addr,
     pub phase: RoundPhase,
     pub expected: RoundPlan,
     pub completed: RoundPlan,

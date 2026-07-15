@@ -230,6 +230,7 @@ async function main() {
 
   const instantiateMsg = {
     round_id: manifest.roundId ?? "zkvm-amaci-round-e2e",
+    checkpoint_authority: account.address,
     verifier: readVerifier(manifest, manifestDir),
     initial_online_state: initialOnlineState(onlineStages, manifestDir),
   };

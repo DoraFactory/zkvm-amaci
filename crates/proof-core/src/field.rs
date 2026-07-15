@@ -16,20 +16,25 @@ pub fn field(value: u128) -> Field {
     Field::from(value)
 }
 
-pub fn add(a: &Field, b: &Field) -> Field {
-    *a + *b
+pub fn checked_add(name: &'static str, a: &Field, b: &Field) -> ProofResult<Field> {
+    a.checked_add(*b).ok_or(ProofError::Arithmetic {
+        operation: "addition",
+        name,
+    })
 }
 
-pub fn sub(a: &Field, b: &Field) -> Field {
-    if a >= b {
-        *a - *b
-    } else {
-        Field::zero()
-    }
+pub fn checked_sub(name: &'static str, a: &Field, b: &Field) -> ProofResult<Field> {
+    a.checked_sub(*b).ok_or(ProofError::Arithmetic {
+        operation: "subtraction",
+        name,
+    })
 }
 
-pub fn mul(a: &Field, b: &Field) -> Field {
-    *a * *b
+pub fn checked_mul(name: &'static str, a: &Field, b: &Field) -> ProofResult<Field> {
+    a.checked_mul(*b).ok_or(ProofError::Arithmetic {
+        operation: "multiplication",
+        name,
+    })
 }
 
 pub fn pow5(base: usize, exp: usize) -> usize {

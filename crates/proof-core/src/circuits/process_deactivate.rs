@@ -1,7 +1,7 @@
 use crate::auth::verify_command_auth_signature;
 use crate::circuits::process_messages::{message_chain, EmptyRule};
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash2};
-use crate::crypto::{decrypt_deactivation_flag, private_to_pub_key};
+use crate::crypto::private_to_pub_key;
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
 use crate::hash_backend::hash_fields;
@@ -161,7 +161,11 @@ fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(Field, Field)> 
         if is_empty {
             continue;
         }
-        let command = decrypt_deactivate_command(input, i)?;
+        let command = match decrypt_deactivate_command(input, i) {
+            Ok(command) => command,
+            Err(ProofError::CiphertextAuthentication) => continue,
+            Err(error) => return Err(error),
+        };
         let roots = process_one(input, i, &active_root, &deactivate_root, &command)?;
         active_root = roots.0;
         deactivate_root = roots.1;
@@ -202,8 +206,16 @@ fn process_one(
     command: &DeactivateCommand,
 ) -> ProofResult<(Field, Field)> {
     let state_leaf = &input.current_state_leaves[i];
+    let state_capacity = quin_capacity(input.state_tree_depth)?;
+    let max_index = Field::from(state_capacity);
+    let state_index_ok = command.state_index < max_index;
+    let index_for_state = if state_index_ok {
+        command.state_index
+    } else {
+        max_index - Field::one()
+    };
     let poll_ok = command.poll_id == input.expected_poll_id;
-    let sig_ok = if poll_ok {
+    let sig_ok = if poll_ok && state_index_ok {
         verify_command_auth_signature(
             &state_leaf[9],
             &input.auth_pub_keys[i],
@@ -213,24 +225,6 @@ fn process_one(
     } else {
         false
     };
-    let current_is_odd = if sig_ok && poll_ok {
-        decrypt_deactivation_flag(
-            &[state_leaf[5].clone(), state_leaf[6].clone()],
-            &[state_leaf[7].clone(), state_leaf[8].clone()],
-            &input.coord_priv_key,
-        )?
-        .1
-    } else {
-        true
-    };
-    let valid = sig_ok && !current_is_odd && poll_ok;
-
-    let max_index = Field::from(5usize.pow(input.state_tree_depth as u32));
-    let index_for_state = if command.state_index <= max_index {
-        command.state_index.clone()
-    } else {
-        &max_index - Field::one()
-    };
     let state_hash = state_leaf_hash_digest(state_leaf)?;
     check_inclusion_digest(
         "deactivate state leaf",
@@ -239,6 +233,18 @@ fn process_one(
         &input.current_state_leaves_path_elements[i],
         &field_to_digest(&input.current_state_root),
     )?;
+
+    check_inclusion(
+        "current active state",
+        &input.current_active_state[i],
+        &index_for_state,
+        &input.active_state_leaves_path_elements[i],
+        current_active_state_root,
+    )?;
+    let valid = state_index_ok && poll_ok && sig_ok && input.current_active_state[i].is_zero();
+    if !valid {
+        return Ok((*current_active_state_root, *current_deactivate_root));
+    }
 
     let expected_user_kem_key =
         crate::pq_kem::kem_public_key_compact(&input.deactivate_kem_pub_keys[i]);
@@ -287,26 +293,24 @@ fn process_one(
             max: Field::from(0u32),
         });
     }
-
-    check_inclusion(
-        "current active state",
-        &input.current_active_state[i],
-        &index_for_state,
-        &input.active_state_leaves_path_elements[i],
-        current_active_state_root,
-    )?;
-    let active_leaf = if valid {
-        input.new_active_state[i].clone()
-    } else {
-        input.current_active_state[i].clone()
-    };
     let new_active_root = root_from_path(
-        &active_leaf,
+        &input.new_active_state[i],
         &index_for_state,
         &input.active_state_leaves_path_elements[i],
     )?;
 
-    let deactivate_index = &input.deactivate_index0 + Field::from(i);
+    let deactivate_index = input
+        .deactivate_index0
+        .checked_add(Field::from(i))
+        .ok_or_else(|| ProofError::Crypto("deactivate index overflow".to_string()))?;
+    let deactivate_capacity = Field::from(quin_capacity(input.state_tree_depth + 2)?);
+    if deactivate_index >= deactivate_capacity {
+        return Err(ProofError::InvalidRange {
+            name: "deactivateIndex",
+            value: deactivate_index,
+            max: deactivate_capacity - Field::one(),
+        });
+    }
     check_inclusion(
         "current deactivate zero leaf",
         &Field::from(0u32),
@@ -331,4 +335,12 @@ fn process_one(
     )?;
 
     Ok((new_active_root, new_deactivate_root))
+}
+
+fn quin_capacity(depth: usize) -> ProofResult<usize> {
+    let exponent = u32::try_from(depth)
+        .map_err(|_| ProofError::Crypto("quin tree depth does not fit u32".to_string()))?;
+    5usize
+        .checked_pow(exponent)
+        .ok_or_else(|| ProofError::Crypto("quin tree capacity overflow".to_string()))
 }

@@ -1,9 +1,11 @@
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
-use crate::hash_backend::hash_fields;
-use crate::native_types::{field_to_digest, NativeCommand};
-use num_traits::{One, Zero};
+use crate::native_types::{digest_to_field, field_to_digest, NativeCommand};
+use hmac::{Hmac, Mac};
+use num_traits::One;
 use sha2::{Digest, Sha256};
+
+type HmacSha256 = Hmac<Sha256>;
 
 pub fn private_to_pub_key(formatted_priv_key: &Field) -> [Field; 2] {
     crate::pq_kem::private_to_pub_key(formatted_priv_key)
@@ -46,26 +48,7 @@ fn field_to_fixed_be_lossy(value: &Field) -> [u8; 32] {
     field_to_digest(value)
 }
 
-pub fn decrypt_deactivation_flag(
-    c1: &[Field; 2],
-    c2: &[Field; 2],
-    formatted_priv_key: &Field,
-) -> ProofResult<(Field, bool)> {
-    if c1.iter().all(Zero::is_zero) && c2.iter().all(Zero::is_zero) {
-        return Ok((Field::from(0u32), false));
-    }
-    let x = hash_fields(&[
-        c1[0].clone(),
-        c1[1].clone(),
-        c2[0].clone(),
-        c2[1].clone(),
-        formatted_priv_key.clone(),
-    ]);
-    let is_odd = x.bit(0);
-    Ok((x, is_odd))
-}
-
-pub fn decrypt_without_check(
+pub fn decrypt_authenticated(
     ciphertext: &[Field],
     key: &[Field; 2],
     nonce: &Field,
@@ -74,7 +57,7 @@ pub fn decrypt_without_check(
     decrypt_payload(ciphertext, key, nonce, len)
 }
 
-pub fn decrypt_without_check_array<const N: usize>(
+pub fn decrypt_authenticated_array<const N: usize>(
     ciphertext: &[Field],
     key: &[Field; 2],
     nonce: &Field,
@@ -98,12 +81,13 @@ fn decrypt_payload(
         });
     }
     validate_native_nonce(nonce)?;
+    verify_native_ciphertext_tag(ciphertext, key, nonce, len)?;
 
     let stream_prefix = native_decrypt_stream_prefix(key, nonce, len);
     let mut decrypted = Vec::with_capacity(decrypted_len);
-    for i in 0..decrypted_len {
+    for (i, word) in ciphertext.iter().take(decrypted_len).enumerate() {
         decrypted.push(native_stream_xor(
-            &ciphertext[i],
+            word,
             &native_decrypt_stream_word(&stream_prefix, i),
         ));
     }
@@ -132,6 +116,7 @@ fn decrypt_payload_array<const N: usize>(
         });
     }
     validate_native_nonce(nonce)?;
+    verify_native_ciphertext_tag(ciphertext, key, nonce, len)?;
 
     let stream_prefix = native_decrypt_stream_prefix(key, nonce, len);
     Ok(std::array::from_fn(|i| {
@@ -166,8 +151,46 @@ pub fn native_encrypt_for_testing(
             &native_decrypt_stream_word(&stream_prefix, i),
         ));
     }
-    ciphertext.push(hash_fields(&ciphertext));
+    let tag = native_ciphertext_tag(&ciphertext, key, nonce, len);
+    ciphertext.push(tag);
     Ok(ciphertext)
+}
+
+fn verify_native_ciphertext_tag(
+    ciphertext: &[Field],
+    key: &[Field; 2],
+    nonce: &Field,
+    len: usize,
+) -> ProofResult<()> {
+    let (payload, tag) = ciphertext
+        .split_last()
+        .map(|(tag, payload)| (payload, tag))
+        .ok_or(ProofError::InvalidLength {
+            name: "native ciphertext",
+            expected: 1,
+            actual: 0,
+        })?;
+    let expected = native_ciphertext_tag(payload, key, nonce, len);
+    if &expected == tag {
+        Ok(())
+    } else {
+        Err(ProofError::CiphertextAuthentication)
+    }
+}
+
+fn native_ciphertext_tag(payload: &[Field], key: &[Field; 2], nonce: &Field, len: usize) -> Field {
+    let mut key_bytes = [0u8; 64];
+    key_bytes[..32].copy_from_slice(&field_to_digest(&key[0]));
+    key_bytes[32..].copy_from_slice(&field_to_digest(&key[1]));
+    let mut mac = HmacSha256::new_from_slice(&key_bytes).expect("HMAC accepts fixed-size keys");
+    mac.update(b"AMACI_ZKVM_NATIVE_CIPHERTEXT_TAG_V1");
+    mac.update(&field_to_digest(nonce));
+    mac.update(&(len as u64).to_be_bytes());
+    mac.update(&(payload.len() as u64).to_be_bytes());
+    for word in payload {
+        mac.update(&field_to_digest(word));
+    }
+    digest_to_field(mac.finalize().into_bytes().into())
 }
 
 fn native_decrypt_stream_prefix(key: &[Field; 2], nonce: &Field, len: usize) -> Sha256 {

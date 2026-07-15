@@ -1,8 +1,8 @@
 use crate::auth::verify_command_auth_signature;
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, hash2};
-use crate::crypto::{decrypt_deactivation_flag, decrypt_without_check_array, private_to_pub_key};
+use crate::crypto::{decrypt_authenticated_array, private_to_pub_key};
 use crate::error::{ProofError, ProofResult};
-use crate::field::{ensure_bool, pow5, Field};
+use crate::field::{checked_add, checked_mul, checked_sub, ensure_bool, pow5, Field};
 use crate::merkle::{
     check_inclusion, check_inclusion_digest, root_from_path, state_leaf_hash,
     state_leaf_hash_digest, zero_root,
@@ -197,7 +197,7 @@ pub fn message_to_command(
         });
     }
     let shared_key = crate::pq_kem::decapsulate_to_fields(enc_priv_key, kem_ciphertext)?;
-    let decrypted = decrypt_without_check_array::<9>(message, &shared_key, &Field::from(0u32), 7)?;
+    let decrypted = decrypt_authenticated_array::<9>(message, &shared_key, &Field::from(0u32), 7)?;
     let unpacked = unpack_element_high_to_low(&decrypted[0], 7)?;
     let new_vote_weight = decode_vote_weight_96(&unpacked[1], &unpacked[2], &unpacked[3])?;
     Ok(Command {
@@ -227,12 +227,16 @@ fn process_batch(
         if is_empty {
             continue;
         }
-        let command = message_to_command(
+        let command = match message_to_command(
             &input.msgs[i],
             &input.coord_priv_key,
             &input.enc_pub_keys[i],
             &input.kem_ciphertexts[i],
-        )?;
+        ) {
+            Ok(command) => command,
+            Err(ProofError::CiphertextAuthentication) => continue,
+            Err(error) => return Err(error),
+        };
         next_state_root = process_one(
             input,
             packed,
@@ -256,10 +260,10 @@ fn process_one(
 ) -> ProofResult<Field> {
     let state_leaf = &input.current_state_leaves[i];
     let max_index = Field::from(pow5(5, input.state_tree_depth));
-    let state_index = if command.state_index <= packed.num_sign_ups {
+    let state_index = if command.state_index < packed.num_sign_ups {
         command.state_index
     } else {
-        &max_index - Field::one()
+        max_index - Field::one()
     };
     let current_leaf_hash = state_leaf_hash_digest(state_leaf)?;
     check_inclusion_digest(
@@ -291,8 +295,8 @@ fn process_one(
         command,
     )?;
 
-    let vote_index = if transform.message_valid {
-        command.vote_option_index.clone()
+    let vote_index = if transform.valid {
+        command.vote_option_index
     } else {
         Field::from(0u32)
     };
@@ -314,7 +318,7 @@ fn process_one(
         });
     }
 
-    if !transform.is_valid {
+    if !transform.valid {
         return Ok(*current_state_root);
     }
 
@@ -346,8 +350,7 @@ fn process_one(
 }
 
 struct TransformResult {
-    message_valid: bool,
-    is_valid: bool,
+    valid: bool,
     new_pub_key: [Field; 2],
     new_balance: Field,
 }
@@ -369,24 +372,12 @@ fn state_leaf_transformer(
         command,
         &input.expected_poll_id,
     )?;
-    let is_deactivated_odd = if msg_valid.0 {
-        decrypt_deactivation_flag(
-            &[state_leaf[5].clone(), state_leaf[6].clone()],
-            &[state_leaf[7].clone(), state_leaf[8].clone()],
-            &input.coord_priv_key,
-        )?
-        .1
-    } else {
-        true
-    };
-    let is_valid = !is_deactivated_odd && msg_valid.0;
     Ok(TransformResult {
-        message_valid: msg_valid.0,
-        is_valid,
-        new_pub_key: if is_valid {
-            command.new_pub_key.clone()
+        valid: msg_valid.0,
+        new_pub_key: if msg_valid.0 {
+            command.new_pub_key
         } else {
-            [state_leaf[0].clone(), state_leaf[1].clone()]
+            [state_leaf[0], state_leaf[1]]
         },
         new_balance: msg_valid.1,
     })
@@ -401,9 +392,9 @@ fn message_validator(
     command: &Command,
     expected_poll_id: &Field,
 ) -> ProofResult<(bool, Field)> {
-    let state_index_ok = command.state_index <= packed.num_sign_ups;
+    let state_index_ok = command.state_index < packed.num_sign_ups;
     let vote_option_ok = command.vote_option_index < packed.max_vote_options;
-    let nonce_ok = state_leaf[4].clone() + Field::one() == command.nonce;
+    let nonce_ok = state_index_ok && state_leaf[4].checked_add(Field::one()) == Some(command.nonce);
     let poll_ok = command.poll_id == *expected_poll_id;
     let sig_ok = if state_index_ok && vote_option_ok && nonce_ok && poll_ok {
         verify_command_auth_signature(
@@ -419,19 +410,27 @@ fn message_validator(
 
     let is_quad = packed.is_quadratic_cost == Field::one();
     let current_cost = if is_quad {
-        current_votes_for_option * current_votes_for_option
+        checked_mul(
+            "current quadratic vote cost",
+            current_votes_for_option,
+            current_votes_for_option,
+        )?
     } else {
-        current_votes_for_option.clone()
+        *current_votes_for_option
     };
     let cost = if is_quad {
-        &command.new_vote_weight * &command.new_vote_weight
+        checked_mul(
+            "new quadratic vote cost",
+            &command.new_vote_weight,
+            &command.new_vote_weight,
+        )?
     } else {
-        command.new_vote_weight.clone()
+        command.new_vote_weight
     };
-    let available = &state_leaf[2] + &current_cost;
+    let available = checked_add("available voice credits", &state_leaf[2], &current_cost)?;
     let sufficient = available >= cost;
     let new_balance = if sufficient {
-        available - cost
+        checked_sub("new voice credit balance", &available, &cost)?
     } else {
         Field::from(0u32)
     };

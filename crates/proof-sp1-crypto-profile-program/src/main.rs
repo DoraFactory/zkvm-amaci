@@ -4,7 +4,7 @@ use amaci_proof_core::auth::{
     auth_keypair_from_seed_for_testing, auth_public_key_hash, sign_command_for_testing,
     verify_command_auth_signature,
 };
-use amaci_proof_core::crypto::{decrypt_without_check_array, native_encrypt_for_testing};
+use amaci_proof_core::crypto::{decrypt_authenticated_array, native_encrypt_for_testing};
 use amaci_proof_core::field::Field;
 use amaci_proof_core::hash_backend::hash_fields;
 use amaci_proof_core::pq_kem::{
@@ -119,7 +119,7 @@ fn profile_command_decrypt(iters: u32) -> [u8; 32] {
     let ciphertext = native_encrypt_for_testing(&plaintext, &key, &nonce, 7).unwrap();
     let mut acc = Field::from(0u32);
     for _ in 0..iters {
-        let decrypted = decrypt_without_check_array::<9>(&ciphertext, &key, &nonce, 7).unwrap();
+        let decrypted = decrypt_authenticated_array::<9>(&ciphertext, &key, &nonce, 7).unwrap();
         acc += hash_fields(&decrypted);
     }
     field_digest(&acc)

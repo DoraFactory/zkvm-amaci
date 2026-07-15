@@ -42,6 +42,15 @@ pub enum ProofError {
     #[error("invalid boolean for {name}: {value}")]
     InvalidBoolean { name: &'static str, value: Field },
 
+    #[error("arithmetic {operation} failed while computing {name}")]
+    Arithmetic {
+        operation: &'static str,
+        name: &'static str,
+    },
+
+    #[error("native ciphertext authentication failed")]
+    CiphertextAuthentication,
+
     #[error("crypto error: {0}")]
     Crypto(String),
 

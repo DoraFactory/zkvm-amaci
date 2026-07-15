@@ -43,9 +43,11 @@ pub fn instantiate(
     let round_id = msg
         .round_id
         .unwrap_or_else(|| "zkvm-amaci-round-e2e".to_string());
+    let checkpoint_authority = deps.api.addr_validate(&msg.checkpoint_authority)?;
     let state = StoredRoundState {
         round_id: round_id.clone(),
         operator: info.sender.clone(),
+        checkpoint_authority: checkpoint_authority.clone(),
         phase: RoundPhase::Open,
         expected: empty_completed_plan(),
         completed: empty_completed_plan(),
@@ -65,6 +67,7 @@ pub fn instantiate(
         .add_attribute("method", "instantiate")
         .add_attribute("round_id", round_id)
         .add_attribute("operator", info.sender)
+        .add_attribute("checkpoint_authority", checkpoint_authority)
         .add_attribute("phase", "open"))
 }
 
@@ -221,8 +224,8 @@ fn execute_close_round(
 ) -> Result<Response, ContractError> {
     let mut state = ROUND_STATE.load(deps.storage)?;
     require_phase(&state, RoundPhase::Open)?;
-    if info.sender != state.operator {
-        return Err(ContractError::Unauthorized);
+    if info.sender != state.checkpoint_authority {
+        return Err(ContractError::UnauthorizedCheckpointAuthority);
     }
     if process_messages_count == 0 || tally_count == 0 {
         return Err(ContractError::InvalidRoundPlan);
@@ -596,6 +599,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             to_json_binary(&RoundStateResponse {
                 round_id: state.round_id,
                 operator: state.operator.to_string(),
+                checkpoint_authority: state.checkpoint_authority.to_string(),
                 phase: state.phase.clone(),
                 expected: state.expected,
                 completed: state.completed,
@@ -633,6 +637,7 @@ mod tests {
     fn instantiate_msg() -> InstantiateMsg {
         InstantiateMsg {
             round_id: Some("round-1".to_string()),
+            checkpoint_authority: "checkpoint".to_string(),
             verifier: verifier(7),
             initial_online_state: InitialOnlineState {
                 current_deactivate_commitment: Binary::from(vec![1; 32]),
@@ -654,12 +659,13 @@ mod tests {
         let response = query(deps.as_ref(), mock_env(), QueryMsg::RoundState {}).unwrap();
         let state: RoundStateResponse = cosmwasm_std::from_json(response).unwrap();
         assert_eq!(state.operator, "operator");
+        assert_eq!(state.checkpoint_authority, "checkpoint");
         assert_eq!(state.phase, RoundPhase::Open);
         assert!(!state.is_complete);
     }
 
     #[test]
-    fn close_requires_operator_and_sets_post_round_plan() {
+    fn close_freezes_authority_checkpoint_and_verified_online_state() {
         let mut deps = mock_dependencies();
         instantiate(
             deps.as_mut(),
@@ -668,6 +674,12 @@ mod tests {
             instantiate_msg(),
         )
         .unwrap();
+        ROUND_STATE
+            .update(deps.as_mut().storage, |mut state| -> StdResult<_> {
+                state.online.current_deactivate_commitment = Binary::from(vec![9; 32]);
+                Ok(state)
+            })
+            .unwrap();
         let msg = ExecuteMsg::CloseRound {
             process_messages_count: 10,
             tally_count: 11,
@@ -678,16 +690,28 @@ mod tests {
         let err = execute(
             deps.as_mut(),
             mock_env(),
-            mock_info("other", &[]),
+            mock_info("operator", &[]),
             msg.clone(),
         )
         .unwrap_err();
-        assert!(matches!(err, ContractError::Unauthorized));
-        execute(deps.as_mut(), mock_env(), mock_info("operator", &[]), msg).unwrap();
+        assert!(matches!(
+            err,
+            ContractError::UnauthorizedCheckpointAuthority
+        ));
+        execute(deps.as_mut(), mock_env(), mock_info("checkpoint", &[]), msg).unwrap();
         let state = ROUND_STATE.load(deps.as_ref().storage).unwrap();
         assert_eq!(state.phase, RoundPhase::Closed);
         assert_eq!(state.expected.process_messages, 10);
         assert_eq!(state.expected.tally, 11);
+        assert_eq!(
+            state.checkpoint,
+            Some(RoundCheckpoint {
+                initial_state_commitment: Binary::from(vec![3; 32]),
+                message_batch_start_hash: Binary::from(vec![4; 32]),
+                message_batch_end_hash: Binary::from(vec![5; 32]),
+                deactivate_commitment: Binary::from(vec![9; 32]),
+            })
+        );
     }
 
     #[test]

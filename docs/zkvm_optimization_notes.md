@@ -4,9 +4,9 @@ The implementation now keeps a single native backend:
 
 - SHA-256 domain-separated hashes for commitments, message chains, Merkle nodes,
   and public-input hashing.
-- Ed25519 command signatures.
-- X25519 key agreement for message encryption keys.
-- Byte-oriented SHA-256 stream encryption for command payloads.
+- ML-DSA-65 command signatures.
+- ML-KEM-768 key encapsulation for message encryption keys and key replacement.
+- Byte-oriented SHA-256 stream encryption with a domain-separated HMAC-SHA256 ciphertext tag.
 - Native `Digest = [u8; 32]` and `NativeCommand` types for canonical command
   signing messages.
 
@@ -58,3 +58,23 @@ Completed follow-up optimization:
 - `processMessages` uses a fixed decrypt output for the native command payload
   and returns early for invalid/no-op messages after required witness checks.
 - `processDeactivate` skips empty slots instead of walking dummy Merkle paths.
+
+## Native Protocol Semantics
+
+The native zkVM protocol intentionally no longer emulates Circom's BN254,
+BabyJubJub, Poseidon, or ElGamal arithmetic. It preserves the AMACI state
+transition structure while using ML-DSA-65, ML-KEM-768, SHA-256 and checked
+`U256` integer arithmetic. In particular:
+
+- the active-state tree is the sole authority for whether a key is inactive;
+- a valid deactivate command updates the active and deactivate trees atomically;
+- an invalid, out-of-range, already-inactive, or unauthenticated deactivate
+  command is a strict no-op and cannot create a leaf consumable by `AddNewKey`;
+- authenticated decryption uses a domain-separated HMAC-SHA256 tag; tag failure
+  makes that queue item a no-op without aborting the rest of the batch;
+- command state indices are zero-based, and balances and tally arithmetic reject
+  overflow or underflow instead of wrapping or saturating.
+
+These changes alter the guest program identity and proof artifacts. Existing
+SP1 vkeys/proofs, RISC Zero image IDs/receipts, recursive tree nodes and deployed
+verifier configuration must be regenerated before the next E2E run.

@@ -86,7 +86,7 @@ fn build_process_messages_input(
     let mut state_indices = vec![Field::from(tree_size - 1); batch_size];
 
     for i in 0..valid_messages {
-        let state_index = Field::from((i + 1) as u32);
+        let state_index = Field::from(i as u32);
         let vote_option_index = Field::from((i % 5) as u32);
         let nonce = Field::from(1u32);
         let new_vote_weight = Field::from((i + 2) as u32);

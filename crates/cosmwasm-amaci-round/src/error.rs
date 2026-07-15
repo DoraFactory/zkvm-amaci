@@ -14,6 +14,9 @@ pub enum ContractError {
     #[error("unauthorized operator action")]
     Unauthorized,
 
+    #[error("unauthorized checkpoint authority")]
+    UnauthorizedCheckpointAuthority,
+
     #[error("round phase mismatch: expected {expected:?}, got {actual:?}")]
     PhaseMismatch {
         expected: RoundPhase,

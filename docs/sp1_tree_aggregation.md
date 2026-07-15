@@ -35,20 +35,25 @@ cannot supply a replacement vkey in an execute message.
 - must be submitted by the round operator;
 - must match the pinned poll ID and coordinator key hash;
 - must start from the contract's current deactivate commitment and message hash;
-- updates the current deactivate commitment and records the new deactivate root.
+- updates the active and deactivate trees atomically for a valid command;
+- treats an invalid, out-of-range, or already-inactive command as a strict tree no-op;
+- records the new deactivate root after proof verification.
 
 `AddNewKey`:
 
 - may be submitted by a user or relayer;
 - must match the pinned poll ID and coordinator key hash;
 - must reference a deactivate root already verified by the contract;
+- can only consume a nonzero leaf created by a valid ProcessDeactivate transition;
 - consumes a nullifier exactly once.
 
 ## Close Checkpoint
 
-Only the operator can call `close_round`. Deactivate/AddNewKey may occur any
-number of times while open; their observed counts are frozen at close together
-with the ProcessMessages/Tally batch counts. The contract also freezes:
+Only the configured checkpoint authority can call `close_round`. The standalone
+E2E sets it to the operator account; production deployments must configure the
+canonical AMACI round contract as the authority. Deactivate/AddNewKey may occur
+any number of times while open; their observed counts are frozen at close
+together with the ProcessMessages/Tally batch counts. The contract also freezes:
 
 - the initial state commitment for message processing;
 - the first and final message-batch hashes;
@@ -57,6 +62,15 @@ with the ProcessMessages/Tally batch counts. The contract also freezes:
 In a production AMACI contract, the first three values must come from canonical
 on-chain round state. The standalone E2E runner reads deterministic fixture
 values from `close-checkpoint.json`.
+
+The verifier contract authenticates the checkpoint source through CosmWasm's
+`info.sender`; it does not query an AMACI contract through an assumed external
+query schema. In production, the canonical AMACI round contract must send the
+`CloseRound` message from its close transition using the values it has just
+frozen. Configuring a wallet address as `checkpoint_authority` is a trusted
+oracle mode intended only for standalone testing. The deactivate commitment is
+never accepted from the close message: it is copied from the verifier
+contract's already-verified online state.
 
 ## Stage Trees
 

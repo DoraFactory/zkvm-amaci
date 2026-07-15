@@ -1,6 +1,6 @@
 use crate::circuits::{assert_input_hash, hash2};
 use crate::error::{ProofError, ProofResult};
-use crate::field::{pow5, Field};
+use crate::field::{checked_add, checked_mul, pow5, Field};
 use crate::hash_backend::hash_pair;
 use crate::merkle::{
     check_inclusion_digest, check_root, check_root_digest, state_leaf_hash_digest, zero_root,
@@ -60,8 +60,12 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
     }
 
     let packed = unpack_tally_packed_vals(&input.packed_vals)?;
-    let batch_start_index = &packed.batch_num * Field::from(batch_size);
-    if batch_start_index > packed.num_sign_ups {
+    let batch_start_index = checked_mul(
+        "tally batch start index",
+        &packed.batch_num,
+        &Field::from(batch_size),
+    )?;
+    if batch_start_index >= packed.num_sign_ups {
         return Err(ProofError::InvalidRange {
             name: "batchStartIndex",
             value: batch_start_index,
@@ -123,7 +127,7 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
         &input.votes,
         is_first_batch,
         num_vote_options,
-    );
+    )?;
     let new_results_root = check_root(&new_results, input.vote_option_tree_depth)?;
     let expected_new_tally = hash_pair(&new_results_root, &input.new_results_root_salt);
     if expected_new_tally != input.new_tally_commitment {
@@ -158,7 +162,7 @@ fn tally_results(
     votes: &[VoteRow],
     is_first_batch: bool,
     num_vote_options: usize,
-) -> Vec<Field> {
+) -> ProofResult<Vec<Field>> {
     let max_votes = Field::from(10u32).pow(Field::from(24u32));
     let mut out = if is_first_batch {
         vec![Field::from(0u32); num_vote_options]
@@ -167,8 +171,10 @@ fn tally_results(
     };
     for row in votes {
         for (i, vote) in row.iter().enumerate() {
-            out[i] += vote * (vote + &max_votes);
+            let weighted_base = checked_add("tally weighted vote base", vote, &max_votes)?;
+            let contribution = checked_mul("tally weighted vote", vote, &weighted_base)?;
+            out[i] = checked_add("tally result", &out[i], &contribution)?;
         }
     }
-    out
+    Ok(out)
 }

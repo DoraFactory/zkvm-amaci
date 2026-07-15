@@ -3,8 +3,7 @@ use crate::auth::{
 };
 use crate::circuits::process_messages::{message_chain, EmptyRule};
 use crate::crypto::{
-    decrypt_deactivation_flag, native_encrypt_for_testing, native_rerandomize_ciphertext,
-    private_to_pub_key,
+    native_encrypt_for_testing, native_rerandomize_ciphertext, private_to_pub_key,
 };
 use crate::error::ProofResult;
 use crate::field::Field;
@@ -706,7 +705,6 @@ fn build_process_deactivate(
 
     let dummy_index = 5usize.pow(state_tree_depth as u32) - 1;
     for slot in 2..batch_size {
-        (c1[slot], c2[slot]) = odd_deactivation_ciphertext(coord_priv_key)?;
         current_state_paths[slot] = state_tree.path(dummy_index)?;
         active_paths[slot] = active_tree.path(dummy_index)?;
         deactivate_paths[slot] = deactivate_tree.path(deactivate_index0 + slot)?;
@@ -1144,19 +1142,6 @@ fn encrypt_command(
         }
     })?;
     Ok((message, compact, kem_ciphertext))
-}
-
-fn odd_deactivation_ciphertext(priv_key: &Field) -> ProofResult<(PubKey, PubKey)> {
-    for value in 1u32..10_000 {
-        let c1 = [Field::from(value), Field::from(0u32)];
-        let c2 = [Field::from(0u32), Field::from(0u32)];
-        if decrypt_deactivation_flag(&c1, &c2, priv_key)?.1 {
-            return Ok((c1, c2));
-        }
-    }
-    Err(crate::ProofError::Crypto(
-        "failed to find odd dummy deactivation ciphertext".to_string(),
-    ))
 }
 
 fn pack_command_data(

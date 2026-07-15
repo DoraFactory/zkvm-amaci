@@ -10,12 +10,13 @@ use amaci_proof_core::codec::{
     decode_input, decode_public_output, encode_input, encode_public_output,
 };
 use amaci_proof_core::crypto::{
-    decrypt_without_check, native_encrypt_for_testing, native_rerandomize_ciphertext,
+    decrypt_authenticated, native_encrypt_for_testing, native_rerandomize_ciphertext,
     private_to_pub_key,
 };
 use amaci_proof_core::error::ProofError;
-use amaci_proof_core::field::{add, ensure_bits, field, mul, sub, two_pow};
-use amaci_proof_core::merkle::{check_root, hash10_exact, hash5_exact};
+use amaci_proof_core::field::{checked_add, checked_mul, checked_sub, ensure_bits, field, two_pow};
+use amaci_proof_core::hash_backend::{hash_fields, hash_pair, hash_public_inputs};
+use amaci_proof_core::merkle::{check_root, hash10_exact, hash5_exact, root_from_path};
 use amaci_proof_core::packing::{
     decode_vote_weight_96, path_index_at, unpack_element_high_to_low,
     unpack_process_messages_packed_vals, unpack_tally_packed_vals,
@@ -42,20 +43,24 @@ fn assert_invalid_range(error: ProofError, expected_name: &'static str) {
 }
 
 #[test]
-fn native_field_helpers_are_fixed_width_arithmetic() {
+fn native_field_helpers_reject_overflow_and_underflow() {
     assert_eq!(field(7), Field::from(7u32));
     assert_eq!(
-        add(&Field::from(9u32), &Field::from(2u32)),
+        checked_add("test", &Field::from(9u32), &Field::from(2u32)).unwrap(),
         Field::from(11u32)
     );
+    assert!(matches!(
+        checked_sub("test", &Field::from(3u32), &Field::from(5u32)),
+        Err(ProofError::Arithmetic { .. })
+    ));
     assert_eq!(
-        sub(&Field::from(3u32), &Field::from(5u32)),
-        Field::from(0u32)
-    );
-    assert_eq!(
-        mul(&Field::from(3u32), &Field::from(4u32)),
+        checked_mul("test", &Field::from(3u32), &Field::from(4u32)).unwrap(),
         Field::from(12u32)
     );
+    assert!(matches!(
+        checked_add("test", &Field::MAX, &Field::one()),
+        Err(ProofError::Arithmetic { .. })
+    ));
 }
 
 #[test]
@@ -168,7 +173,7 @@ fn native_crypto_roundtrips() {
     let mut plaintext = vec![Field::from(1u32); 7];
     plaintext.resize(9, Field::from(0u32));
     let ciphertext = native_encrypt_for_testing(&plaintext, &key, &nonce, len).unwrap();
-    let decrypted = decrypt_without_check(&ciphertext, &key, &nonce, len).unwrap();
+    let decrypted = decrypt_authenticated(&ciphertext, &key, &nonce, len).unwrap();
     assert_eq!(decrypted, plaintext);
 
     let (d1, d2) = native_rerandomize_ciphertext(
@@ -181,15 +186,15 @@ fn native_crypto_roundtrips() {
 }
 
 #[test]
-fn native_decrypt_rejects_bad_ciphertext_shape_and_nonce() {
+fn native_decrypt_rejects_bad_shape_nonce_and_authentication() {
     let key = [Field::from(1u32), Field::from(2u32)];
     assert_invalid_length(
-        decrypt_without_check(&vec![Field::from(0u32); 3], &key, &Field::from(0u32), 7)
+        decrypt_authenticated(&vec![Field::from(0u32); 3], &key, &Field::from(0u32), 7)
             .unwrap_err(),
         "native ciphertext",
     );
     assert_invalid_range(
-        decrypt_without_check(
+        decrypt_authenticated(
             &vec![Field::from(0u32); 10],
             &key,
             &(Field::one() << 128usize),
@@ -198,6 +203,200 @@ fn native_decrypt_rejects_bad_ciphertext_shape_and_nonce() {
         .unwrap_err(),
         "native nonce",
     );
+
+    let nonce = Field::from(7u32);
+    let mut plaintext = vec![Field::from(1u32); 7];
+    plaintext.resize(9, Field::from(0u32));
+    let ciphertext = native_encrypt_for_testing(&plaintext, &key, &nonce, 7).unwrap();
+
+    let mut tampered_payload = ciphertext.clone();
+    tampered_payload[0] += Field::one();
+    assert!(matches!(
+        decrypt_authenticated(&tampered_payload, &key, &nonce, 7),
+        Err(ProofError::CiphertextAuthentication)
+    ));
+
+    let mut tampered_tag = ciphertext.clone();
+    *tampered_tag.last_mut().unwrap() += Field::one();
+    assert!(matches!(
+        decrypt_authenticated(&tampered_tag, &key, &nonce, 7),
+        Err(ProofError::CiphertextAuthentication)
+    ));
+
+    let wrong_key = [Field::from(3u32), Field::from(4u32)];
+    assert!(matches!(
+        decrypt_authenticated(&ciphertext, &wrong_key, &nonce, 7),
+        Err(ProofError::CiphertextAuthentication)
+    ));
+}
+
+#[test]
+fn invalid_deactivate_is_a_strict_tree_noop() {
+    let mut input = single_deactivate_input();
+    input.auth_signatures[0][0] ^= 1;
+    set_deactivate_noop_outputs(&mut input);
+
+    let output = execute_proof_logic(&ProverInput::ProcessDeactivate(input.clone())).unwrap();
+    let PublicOutput::ProcessDeactivate(output) = output else {
+        panic!("wrong output variant");
+    };
+    assert_eq!(
+        output.new_deactivate_root,
+        public_value(&input.current_deactivate_root)
+    );
+    assert_eq!(
+        output.new_deactivate_commitment,
+        public_value(&input.current_deactivate_commitment)
+    );
+}
+
+#[test]
+fn unauthenticated_deactivate_ciphertext_is_a_strict_tree_noop() {
+    let mut input = single_deactivate_input();
+    input.msgs[0][9] += Field::one();
+    input.batch_end_hash = message_chain(
+        &input.batch_start_hash,
+        &input.msgs,
+        &input.enc_pub_keys,
+        EmptyRule::Message0,
+    )
+    .unwrap();
+    set_deactivate_noop_outputs(&mut input);
+
+    execute_proof_logic(&ProverInput::ProcessDeactivate(input)).unwrap();
+}
+
+#[test]
+fn unauthenticated_vote_ciphertext_is_a_strict_state_noop() {
+    let mut input = amaci_proof_core::sample_inputs::process_messages_native_2_1_5().unwrap();
+    input.msgs[0][9] += Field::one();
+    input.batch_end_hash = message_chain(
+        &input.batch_start_hash,
+        &input.msgs,
+        &input.enc_pub_keys,
+        EmptyRule::EncPubKeyX,
+    )
+    .unwrap();
+    input.new_state_commitment = hash_pair(&input.current_state_root, &input.new_state_salt);
+    input.input_hash = hash_public_inputs(&[
+        input.packed_vals,
+        hash_fields(&input.coord_pub_key),
+        input.batch_start_hash,
+        input.batch_end_hash,
+        input.current_state_commitment,
+        input.new_state_commitment,
+        input.deactivate_commitment,
+        input.expected_poll_id,
+    ]);
+
+    let output = execute_proof_logic(&ProverInput::ProcessMessages(input.clone())).unwrap();
+    let PublicOutput::ProcessMessages(output) = output else {
+        panic!("wrong output variant");
+    };
+    assert_eq!(
+        output.new_state_commitment,
+        public_value(&input.new_state_commitment)
+    );
+}
+
+#[test]
+fn already_inactive_user_cannot_create_another_deactivate_leaf() {
+    let mut input = single_deactivate_input();
+    let state_index = Field::from(1u32);
+    input.current_active_state[0] = Field::from(99u32);
+    input.current_active_state_root = root_from_path(
+        &input.current_active_state[0],
+        &state_index,
+        &input.active_state_leaves_path_elements[0],
+    )
+    .unwrap();
+    input.current_deactivate_commitment = hash_pair(
+        &input.current_active_state_root,
+        &input.current_deactivate_root,
+    );
+    set_deactivate_noop_outputs(&mut input);
+
+    execute_proof_logic(&ProverInput::ProcessDeactivate(input)).unwrap();
+}
+
+#[test]
+fn add_new_key_cannot_use_a_leaf_from_an_invalid_deactivate() {
+    let mut deactivate = single_deactivate_input();
+    deactivate.auth_signatures[0][0] ^= 1;
+    set_deactivate_noop_outputs(&mut deactivate);
+
+    execute_proof_logic(&ProverInput::ProcessDeactivate(deactivate.clone())).unwrap();
+
+    let mut add_new_key = amaci_proof_core::sample_inputs::add_new_key_native_2().unwrap();
+    assert_eq!(add_new_key.deactivate_index, deactivate.deactivate_index0);
+    add_new_key.deactivate_root = deactivate.current_deactivate_root;
+    add_new_key.input_hash = hash_public_inputs(&[
+        add_new_key.deactivate_root,
+        hash_fields(&add_new_key.coord_pub_key),
+        add_new_key.nullifier,
+        add_new_key.d1[0],
+        add_new_key.d1[1],
+        add_new_key.d2[0],
+        add_new_key.d2[1],
+        hash_fields(&add_new_key.new_pub_key),
+        add_new_key.poll_id,
+    ]);
+
+    let error = execute_proof_logic(&ProverInput::AddNewKey(add_new_key)).unwrap_err();
+    assert!(matches!(
+        error,
+        ProofError::MerkleRootMismatch {
+            name: "deactivate leaf",
+            ..
+        }
+    ));
+}
+
+fn single_deactivate_input() -> amaci_proof_core::types::ProcessDeactivateInput {
+    let mut input = amaci_proof_core::sample_inputs::process_deactivate_native_2_5().unwrap();
+    input.batch_size = 1;
+    input.msgs.truncate(1);
+    input.enc_pub_keys.truncate(1);
+    input.kem_ciphertexts.truncate(1);
+    input.auth_pub_keys.truncate(1);
+    input.auth_signatures.truncate(1);
+    input.deactivate_kem_pub_keys.truncate(1);
+    input.deactivate_kem_randomness.truncate(1);
+    input.deactivate_kem_ciphertexts.truncate(1);
+    input.c1.truncate(1);
+    input.c2.truncate(1);
+    input.current_active_state.truncate(1);
+    input.new_active_state.truncate(1);
+    input.current_state_leaves.truncate(1);
+    input.current_state_leaves_path_elements.truncate(1);
+    input.active_state_leaves_path_elements.truncate(1);
+    input.deactivate_leaves_path_elements.truncate(1);
+    input.batch_end_hash = message_chain(
+        &input.batch_start_hash,
+        &input.msgs,
+        &input.enc_pub_keys,
+        EmptyRule::Message0,
+    )
+    .unwrap();
+    input
+}
+
+fn set_deactivate_noop_outputs(input: &mut amaci_proof_core::types::ProcessDeactivateInput) {
+    input.new_deactivate_root = input.current_deactivate_root;
+    input.new_deactivate_commitment = hash_pair(
+        &input.current_active_state_root,
+        &input.current_deactivate_root,
+    );
+    input.input_hash = hash_public_inputs(&[
+        input.new_deactivate_root,
+        hash_fields(&input.coord_pub_key),
+        input.batch_start_hash,
+        input.batch_end_hash,
+        input.current_deactivate_commitment,
+        input.new_deactivate_commitment,
+        input.current_state_root,
+        input.expected_poll_id,
+    ]);
 }
 
 #[test]
