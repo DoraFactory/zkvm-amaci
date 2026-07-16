@@ -3,6 +3,3 @@
 # precompiles in the SP1 guest. Use with:
 #   cargo --config configs/cargo-sp1-native-patches.toml ...
 sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
-# ml-kem 0.3.x implements SHAKE with sha3 0.11; this patch dispatches its
-# Keccak-f permutations to the SP1 precompile in the Succinct zkVM guest.
-sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.11.0-sp1-6.0.0" }
