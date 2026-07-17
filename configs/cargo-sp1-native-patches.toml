@@ -1,5 +1,3 @@
-[patch.crates-io]
-# SP1 patched crates route supported crypto operations through SP1
-# precompiles in the SP1 guest. Use with:
-#   cargo --config configs/cargo-sp1-native-patches.toml ...
-sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
+# Compatibility shim for existing commands which pass this file with
+# `cargo --config`. SP1 hash patches live in the workspace Cargo.toml so they
+# also apply to the nested guest builds launched by sp1-build.

@@ -35,6 +35,10 @@ mkdir -p logs metrics proofs sp1-proofs
 log="logs/${backend}-${circuit}-${stamp}.log"
 metrics="metrics/${backend}-${circuit}-${stamp}.metrics.txt"
 time_out="metrics/${backend}-${circuit}-${stamp}.time.txt"
+: > "$time_out"
+
+timed_labels=()
+timed_time_logs=()
 
 stat_size() {
   local path="$1"
@@ -52,8 +56,9 @@ last_log_value() {
   awk -F= -v key="$key" '$1 == key { value = $2 } END { if (value != "") print value; else print "missing" }' "$log"
 }
 
-max_rss_kbytes() {
-  if [[ ! -s "$time_out" ]]; then
+max_rss_kbytes_from() {
+  local path="$1"
+  if [[ ! -s "$path" ]]; then
     echo "missing"
     return
   fi
@@ -63,11 +68,12 @@ max_rss_kbytes() {
       if (($2 + 0) > max) max = $2 + 0
     }
     END { if (max > 0) print max; else print "missing" }
-  ' "$time_out"
+  ' "$path"
 }
 
-elapsed_wall_values() {
-  if [[ ! -s "$time_out" ]]; then
+elapsed_wall_values_from() {
+  local path="$1"
+  if [[ ! -s "$path" ]]; then
     echo "missing"
     return
   fi
@@ -79,22 +85,54 @@ elapsed_wall_values() {
       values = values ? values "," value : value
     }
     END { if (values != "") print values; else print "missing" }
-  ' "$time_out"
+  ' "$path"
+}
+
+max_rss_kbytes() {
+  max_rss_kbytes_from "$time_out"
+}
+
+elapsed_wall_values() {
+  elapsed_wall_values_from "$time_out"
 }
 
 run_timed() {
   local label="$1"
   shift
+  local slug
+  local command_time_out
+  slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')"
+  command_time_out="${time_out%.time.txt}.${slug}.time.txt"
+  : > "$command_time_out"
   {
     echo "== ${label} start $(date -Is) =="
     echo "+ $*"
   } >> "$log"
-  if command -v /usr/bin/time >/dev/null 2>&1; then
-    /usr/bin/time -v -o "$time_out" -a "$@" >> "$log" 2>&1
+  if /usr/bin/time -v true >/dev/null 2>&1; then
+    /usr/bin/time -v -o "$command_time_out" "$@" >> "$log" 2>&1
+    cat "$command_time_out" >> "$time_out"
   else
     { time "$@"; } >> "$log" 2>&1
   fi
   echo "== ${label} end $(date -Is) ==" >> "$log"
+  timed_labels+=("$label")
+  timed_time_logs+=("$command_time_out")
+}
+
+build_sp1_host() {
+  local target_dir="$1"
+  SP1_HOST_BINARY="$target_dir/release/amaci-proof-sp1-host"
+  {
+    echo "== sp1 host build start $(date -Is) =="
+    echo "+ env CARGO_TARGET_DIR=$target_dir cargo build --release -p amaci-proof-sp1-host"
+  } >> "$log"
+  env CARGO_TARGET_DIR="$target_dir" \
+    cargo build --release -p amaci-proof-sp1-host >> "$log" 2>&1
+  [[ -x "$SP1_HOST_BINARY" ]] || {
+    echo "missing SP1 host binary: $SP1_HOST_BINARY" >&2
+    exit 1
+  }
+  echo "== sp1 host build end $(date -Is) ==" >> "$log"
 }
 
 write_common_metrics() {
@@ -106,6 +144,18 @@ write_common_metrics() {
     echo "time_log=$time_out"
     echo "elapsed_wall_values=$(elapsed_wall_values)"
     echo "max_rss_kbytes=$(max_rss_kbytes)"
+    if [[ -n "${SP1_HOST_BINARY:-}" ]]; then
+      echo "host_binary=$SP1_HOST_BINARY"
+    fi
+    local index label key phase_time_log
+    for index in "${!timed_labels[@]}"; do
+      label="${timed_labels[$index]}"
+      phase_time_log="${timed_time_logs[$index]}"
+      key="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')"
+      echo "${key}_time_log=$phase_time_log"
+      echo "${key}_elapsed_wall=$(elapsed_wall_values_from "$phase_time_log")"
+      echo "${key}_max_rss_kbytes=$(max_rss_kbytes_from "$phase_time_log")"
+    done
     echo "input_bytes=$(last_log_value input_bytes)"
     echo "public_values_bytes=$(last_log_value public_bytes)"
     echo "instructions=$(last_log_value instructions)"
@@ -159,18 +209,16 @@ run_sp1() {
   local public="sp1-proofs/${circuit}.sp1.public.json"
   local verified_public="sp1-proofs/${circuit}.sp1.verified-public.json"
 
+  build_sp1_host "$target_dir"
+
   run_timed "sp1 prove" \
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-host -- \
+    "$SP1_HOST_BINARY" \
       prove "$circuit" \
       --proof "$proof" \
       --public "$public"
 
   run_timed "sp1 verify" \
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-host -- \
+    "$SP1_HOST_BINARY" \
       verify \
       --proof "$proof" \
       --public "$verified_public"
@@ -200,10 +248,10 @@ run_sp1_groth16() {
   local verified_public="sp1-proofs/${circuit}.sp1-groth16.verified-public.json"
   local vkey="sp1-proofs/${circuit}.sp1-groth16.vkey.txt"
 
+  build_sp1_host "$target_dir"
+
   run_timed "sp1 groth16 prove" \
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-host -- \
+    "$SP1_HOST_BINARY" \
       prove-groth16 "$circuit" \
       --proof "$proof" \
       --proof-bytes "$proof_bytes" \
@@ -212,9 +260,7 @@ run_sp1_groth16() {
       --vkey "$vkey"
 
   run_timed "sp1 groth16 verify" \
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-host -- \
+    "$SP1_HOST_BINARY" \
       verify-groth16 \
       --proof-bytes "$proof_bytes" \
       --public-bytes "$public_bytes" \
@@ -251,10 +297,10 @@ run_sp1_compressed() {
   local verified_public="sp1-proofs/${circuit}.sp1-compressed.verified-public.json"
   local vkey="sp1-proofs/${circuit}.sp1-compressed.vkey.bin"
 
+  build_sp1_host "$target_dir"
+
   run_timed "sp1 compressed prove" \
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-host -- \
+    "$SP1_HOST_BINARY" \
       prove-compressed "$circuit" \
       --proof "$proof" \
       --proof-bytes "$proof_bytes" \
@@ -263,9 +309,7 @@ run_sp1_compressed() {
       --vkey "$vkey"
 
   run_timed "sp1 compressed verify" \
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-host -- \
+    "$SP1_HOST_BINARY" \
       verify-compressed \
       --proof-bytes "$proof_bytes" \
       --public-bytes "$public_bytes" \
@@ -298,10 +342,10 @@ run_sp1_execute() {
   local target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-target}"
   local public="sp1-proofs/${circuit}.sp1.execute-public.json"
 
+  build_sp1_host "$target_dir"
+
   run_timed "sp1 execute" \
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-host -- \
+    "$SP1_HOST_BINARY" \
       execute "$circuit" \
       --public "$public"
 

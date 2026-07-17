@@ -75,6 +75,7 @@ append_summary() {
   local backend="$1"
   local circuit="$2"
   local metric_file="$3"
+  local key_prefix="${backend//-/_}"
   {
     printf "%s\t%s\t%s\t" "$backend" "$circuit" "$metric_file"
     printf "%s\t" "$(metric_value "$metric_file" avg_execute_ms)"
@@ -86,7 +87,12 @@ append_summary() {
     printf "%s\t" "$(metric_value "$metric_file" max_rss_kbytes)"
     printf "%s\t" "$(metric_value "$metric_file" proof_bytes_raw)"
     printf "%s\t" "$(metric_value "$metric_file" proof_bytes_bincode)"
-    printf "%s\n" "$(metric_value "$metric_file" receipt_bytes)"
+    printf "%s\t" "$(metric_value "$metric_file" receipt_bytes)"
+    printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_execute_elapsed_wall")"
+    printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_prove_elapsed_wall")"
+    printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_prove_max_rss_kbytes")"
+    printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_verify_elapsed_wall")"
+    printf "%s\n" "$(metric_value "$metric_file" "${key_prefix}_verify_max_rss_kbytes")"
   } >> "$summary"
 }
 
@@ -98,7 +104,7 @@ append_native_summary() {
     printf "%s\t" "$(metric_value "$metric_file" avg_execute_ms)"
     printf "%s\t" "$(metric_value "$metric_file" input_bytes)"
     printf "%s\t" "$(metric_value "$metric_file" public_bytes)"
-    printf "missing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\n"
+    printf "missing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\n"
   } >> "$summary"
 }
 
@@ -109,7 +115,7 @@ append_native_summary() {
   echo "circuits=${circuits[*]}"
 } > "$suite_log"
 
-printf "backend\tcircuit\tmetrics\tavg_execute_ms\tinput_bytes\tpublic_values_bytes\tinstructions\tsyscalls\ttouched_memory_addresses\tmax_rss_kbytes\tproof_bytes_raw\tproof_bytes_bincode\treceipt_bytes\n" > "$summary"
+printf "backend\tcircuit\tmetrics\tavg_execute_ms\tinput_bytes\tpublic_values_bytes\tinstructions\tsyscalls\ttouched_memory_addresses\tmax_rss_kbytes\tproof_bytes_raw\tproof_bytes_bincode\treceipt_bytes\texecute_elapsed_wall\tprove_elapsed_wall\tprove_max_rss_kbytes\tverify_elapsed_wall\tverify_max_rss_kbytes\n" > "$summary"
 
 for circuit in "${circuits[@]}"; do
   native_out="metrics/native-profile-${circuit}-${stamp}.txt"

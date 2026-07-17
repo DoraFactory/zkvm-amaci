@@ -45,6 +45,7 @@ mkdir -p logs metrics
 suite_log="logs/sp1-crypto-profile-${stamp}.out"
 summary="metrics/sp1-crypto-profile-${stamp}.summary.tsv"
 target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-target}"
+host_binary="$target_dir/release/amaci-proof-sp1-crypto-profile-host"
 
 metric_value() {
   local path="$1"
@@ -102,6 +103,18 @@ printf "op\tmetrics\titers\tinput_bytes\tpublic_bytes\tinstructions\tinstruction
   echo "target_dir=$target_dir"
 } > "$suite_log"
 
+{
+  echo "== sp1 crypto profile host build start $(date -Is) =="
+  echo "+ env CARGO_TARGET_DIR=$target_dir cargo build --release -p amaci-proof-sp1-crypto-profile-host"
+} >> "$suite_log"
+env CARGO_TARGET_DIR="$target_dir" \
+  cargo build --release -p amaci-proof-sp1-crypto-profile-host >> "$suite_log" 2>&1
+[[ -x "$host_binary" ]] || {
+  echo "missing SP1 crypto profile host binary: $host_binary" >&2
+  exit 1
+}
+echo "== sp1 crypto profile host build end $(date -Is) ==" >> "$suite_log"
+
 for op in "${ops[@]}"; do
   log="logs/sp1-crypto-profile-${op}-${stamp}.log"
   metrics="metrics/sp1-crypto-profile-${op}-${stamp}.metrics.txt"
@@ -113,19 +126,15 @@ for op in "${ops[@]}"; do
 
   {
     echo "== sp1 crypto profile ${op} start $(date -Is) =="
-    echo "+ env CARGO_TARGET_DIR=$target_dir cargo --config configs/cargo-sp1-native-patches.toml run --release -p amaci-proof-sp1-crypto-profile-host -- ${args[*]}"
+    echo "+ $host_binary ${args[*]}"
   } >> "$suite_log"
 
-  if command -v /usr/bin/time >/dev/null 2>&1; then
+  if /usr/bin/time -v true >/dev/null 2>&1; then
     /usr/bin/time -v -o "$time_out" \
-      env CARGO_TARGET_DIR="$target_dir" \
-        cargo --config configs/cargo-sp1-native-patches.toml run --release \
-        -p amaci-proof-sp1-crypto-profile-host -- "${args[@]}" \
+      "$host_binary" "${args[@]}" \
         > "$log" 2>&1
   else
-    env CARGO_TARGET_DIR="$target_dir" \
-      cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-crypto-profile-host -- "${args[@]}" \
+    "$host_binary" "${args[@]}" \
       > "$log" 2>&1
   fi
 

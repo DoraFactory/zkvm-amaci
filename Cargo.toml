@@ -17,11 +17,12 @@ members = [
 ]
 resolver = "2"
 
-# SP1's patched SHA3 dispatches Keccak-f to a syscall only for the Succinct
-# zkVM target. Native and RISC Zero targets retain the portable backend. This
-# must live in the workspace manifest so sp1-build's nested Cargo invocation
-# uses it when compiling each guest ELF.
+# SP1's patched hashes dispatch supported operations to syscalls only for the
+# Succinct zkVM target. Native and RISC Zero targets retain their portable
+# backends. These patches must live in the workspace manifest so sp1-build's
+# nested Cargo invocation uses them when compiling each guest ELF.
 [patch.crates-io]
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
 sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.11.0-sp1-6.0.0" }
 
 # RISC Zero guests are expensive to build without optimization.
