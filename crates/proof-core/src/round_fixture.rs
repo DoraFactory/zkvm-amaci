@@ -10,9 +10,9 @@ use crate::field::Field;
 use crate::hash_backend::{hash_fields, hash_pair, hash_public_inputs, hash_state_leaf};
 use crate::merkle::{hash5_exact, zero_root};
 use crate::types::{
-    AddNewKeyInput, KemCiphertext, KemPublicKey, Message, PathElement, PathElements,
-    ProcessDeactivateInput, ProcessMessagesInput, ProverInput, PubKey, StateLeaf, TallyVotesInput,
-    VoteRow, VOTE_ROW_WORDS,
+    AddNewKeyInput, AuthPublicKey, AuthSignature, KemCiphertext, KemPublicKey, Message,
+    PathElement, PathElements, ProcessDeactivateInput, ProcessMessagesInput, ProverInput, PubKey,
+    StateLeaf, TallyVotesInput, VoteRow, VOTE_ROW_WORDS,
 };
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ struct User {
     priv_key: Field,
     pub_key: PubKey,
     kem_pub_key: KemPublicKey,
-    auth_pub_key: Vec<u8>,
+    auth_pub_key: AuthPublicKey,
     balance: Field,
     nonce: Field,
     votes: VoteRow,
@@ -647,8 +647,8 @@ fn build_process_deactivate(
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
     let mut kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
-    let mut auth_pub_keys = vec![Vec::new(); batch_size];
-    let mut auth_signatures = vec![Vec::new(); batch_size];
+    let mut auth_pub_keys = vec![AuthPublicKey::zero(); batch_size];
+    let mut auth_signatures = vec![AuthSignature::zero(); batch_size];
     let mut deactivate_kem_pub_keys = vec![KemPublicKey::zero(); batch_size];
     let mut deactivate_kem_randomness = vec![zero; batch_size];
     let mut deactivate_kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
@@ -854,8 +854,8 @@ fn build_process_messages_batch(
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero, zero]; batch_size];
     let mut kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
-    let mut auth_pub_keys = vec![Vec::new(); batch_size];
-    let mut auth_signatures = vec![Vec::new(); batch_size];
+    let mut auth_pub_keys = vec![AuthPublicKey::zero(); batch_size];
+    let mut auth_signatures = vec![AuthSignature::zero(); batch_size];
     let mut current_state_leaves = vec![[zero; 10]; batch_size];
     let mut current_state_paths = vec![Vec::new(); batch_size];
     let mut active_state_leaves = vec![zero; batch_size];

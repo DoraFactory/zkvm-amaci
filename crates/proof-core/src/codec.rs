@@ -6,9 +6,10 @@ use crate::public_output::{
     TallyVotesPublicOutput,
 };
 use crate::types::{
-    AddNewKeyInput, KemCiphertext, KemPublicKey, Message, PathElement, PathElements,
+    AddNewKeyInput, FixedBytes, KemCiphertext, KemPublicKey, Message, PathElement, PathElements,
     ProcessDeactivateInput, ProcessMessagesInput, ProverInput, PubKey, StateLeaf, TallyVotesInput,
-    VoteRow, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES, VOTE_ROW_WORDS,
+    VoteRow, AUTH_PUBLIC_KEY_BYTES, AUTH_SIGNATURE_BYTES, KEM_CIPHERTEXT_BYTES,
+    KEM_PUBLIC_KEY_BYTES, VOTE_ROW_WORDS,
 };
 use crate::PublicOutput;
 
@@ -223,8 +224,8 @@ fn encode_process_messages(out: &mut Vec<u8>, input: &ProcessMessagesInput) {
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
     write_kem_ciphertexts(out, &input.kem_ciphertexts);
-    write_byte_vecs(out, &input.auth_pub_keys);
-    write_byte_vecs(out, &input.auth_signatures);
+    write_fixed_byte_vecs(out, &input.auth_pub_keys);
+    write_fixed_byte_vecs(out, &input.auth_signatures);
     write_field(out, &input.current_state_root);
     write_state_leaves(out, &input.current_state_leaves);
     write_path_sets(out, &input.current_state_leaves_path_elements);
@@ -256,8 +257,8 @@ fn decode_process_messages(input: &mut Decoder<'_>) -> ProofResult<ProcessMessag
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
         kem_ciphertexts: input.read_kem_ciphertexts("kemCiphertexts")?,
-        auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
-        auth_signatures: input.read_byte_vecs("authSignatures")?,
+        auth_pub_keys: input.read_fixed_byte_vecs::<AUTH_PUBLIC_KEY_BYTES>("authPubKeys")?,
+        auth_signatures: input.read_fixed_byte_vecs::<AUTH_SIGNATURE_BYTES>("authSignatures")?,
         current_state_root: input.read_field("currentStateRoot")?,
         current_state_leaves: input.read_state_leaves("currentStateLeaves")?,
         current_state_leaves_path_elements: input
@@ -331,8 +332,8 @@ fn encode_process_deactivate(out: &mut Vec<u8>, input: &ProcessDeactivateInput) 
     write_messages(out, &input.msgs);
     write_pub_keys(out, &input.enc_pub_keys);
     write_kem_ciphertexts(out, &input.kem_ciphertexts);
-    write_byte_vecs(out, &input.auth_pub_keys);
-    write_byte_vecs(out, &input.auth_signatures);
+    write_fixed_byte_vecs(out, &input.auth_pub_keys);
+    write_fixed_byte_vecs(out, &input.auth_signatures);
     write_kem_public_keys(out, &input.deactivate_kem_pub_keys);
     write_fields(out, &input.deactivate_kem_randomness);
     write_kem_ciphertexts(out, &input.deactivate_kem_ciphertexts);
@@ -366,8 +367,8 @@ fn decode_process_deactivate(input: &mut Decoder<'_>) -> ProofResult<ProcessDeac
         msgs: input.read_messages("msgs")?,
         enc_pub_keys: input.read_pub_keys("encPubKeys")?,
         kem_ciphertexts: input.read_kem_ciphertexts("kemCiphertexts")?,
-        auth_pub_keys: input.read_byte_vecs("authPubKeys")?,
-        auth_signatures: input.read_byte_vecs("authSignatures")?,
+        auth_pub_keys: input.read_fixed_byte_vecs::<AUTH_PUBLIC_KEY_BYTES>("authPubKeys")?,
+        auth_signatures: input.read_fixed_byte_vecs::<AUTH_SIGNATURE_BYTES>("authSignatures")?,
         deactivate_kem_pub_keys: input.read_kem_public_keys("deactivateKemPubKeys")?,
         deactivate_kem_randomness: input.read_fields("deactivateKemRandomness")?,
         deactivate_kem_ciphertexts: input.read_kem_ciphertexts("deactivateKemCiphertexts")?,
@@ -461,15 +462,15 @@ fn write_pub_keys(out: &mut Vec<u8>, values: &[PubKey]) {
     }
 }
 
-fn write_byte_vec(out: &mut Vec<u8>, value: &[u8]) {
-    write_usize(out, value.len());
-    out.extend_from_slice(value);
-}
-
-fn write_byte_vecs(out: &mut Vec<u8>, values: &[Vec<u8>]) {
+fn write_fixed_byte_vecs<const N: usize>(out: &mut Vec<u8>, values: &[FixedBytes<N>]) {
     write_usize(out, values.len());
     for value in values {
-        write_byte_vec(out, value);
+        if value.is_zero() {
+            write_usize(out, 0);
+        } else {
+            write_usize(out, N);
+            out.extend_from_slice(value.as_ref());
+        }
     }
 }
 
@@ -639,16 +640,33 @@ impl<'a> Decoder<'a> {
         Ok(out)
     }
 
-    fn read_byte_vec(&mut self, name: &'static str) -> ProofResult<Vec<u8>> {
+    fn read_fixed_bytes<const N: usize>(
+        &mut self,
+        name: &'static str,
+    ) -> ProofResult<FixedBytes<N>> {
         let len = self.read_usize(name)?;
-        Ok(self.take(name, len)?.to_vec())
+        if len == 0 {
+            return Ok(FixedBytes::zero());
+        }
+        if len != N {
+            return Err(ProofError::InvalidLength {
+                name,
+                expected: N,
+                actual: len,
+            });
+        }
+        Ok(FixedBytes::from_slice(self.take(name, N)?)
+            .expect("decoder returned exact fixed byte length"))
     }
 
-    fn read_byte_vecs(&mut self, name: &'static str) -> ProofResult<Vec<Vec<u8>>> {
+    fn read_fixed_byte_vecs<const N: usize>(
+        &mut self,
+        name: &'static str,
+    ) -> ProofResult<Vec<FixedBytes<N>>> {
         let len = self.read_usize(name)?;
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
-            out.push(self.read_byte_vec(name)?);
+            out.push(self.read_fixed_bytes(name)?);
         }
         Ok(out)
     }

@@ -1,11 +1,80 @@
 use crate::field::Field;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::ops::{Deref, DerefMut};
 
 pub type PubKey = [Field; 2];
-pub type AuthPublicKey = Vec<u8>;
-pub type AuthSignature = Vec<u8>;
+pub const AUTH_PUBLIC_KEY_BYTES: usize = 1952;
+pub const AUTH_SIGNATURE_BYTES: usize = 3309;
 pub const KEM_PUBLIC_KEY_BYTES: usize = 1184;
 pub const KEM_CIPHERTEXT_BYTES: usize = 1088;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedBytes<const N: usize>(pub [u8; N]);
+
+pub type AuthPublicKey = FixedBytes<AUTH_PUBLIC_KEY_BYTES>;
+pub type AuthSignature = FixedBytes<AUTH_SIGNATURE_BYTES>;
+
+impl<const N: usize> FixedBytes<N> {
+    pub fn zero() -> Self {
+        Self([0u8; N])
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        let array: [u8; N] = bytes.try_into().ok()?;
+        Some(Self(array))
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.0.iter().all(|byte| *byte == 0)
+    }
+}
+
+impl<const N: usize> AsRef<[u8]> for FixedBytes<N> {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl<const N: usize> Deref for FixedBytes<N> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const N: usize> DerefMut for FixedBytes<N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<const N: usize> Serialize for FixedBytes<N> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if self.is_zero() {
+            serializer.serialize_bytes(&[])
+        } else {
+            serializer.serialize_bytes(self.as_ref())
+        }
+    }
+}
+
+impl<'de, const N: usize> Deserialize<'de> for FixedBytes<N> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        if bytes.is_empty() {
+            return Ok(Self::zero());
+        }
+        Self::from_slice(&bytes)
+            .ok_or_else(|| serde::de::Error::invalid_length(bytes.len(), &"fixed byte length"))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KemCiphertext(pub [u8; KEM_CIPHERTEXT_BYTES]);
