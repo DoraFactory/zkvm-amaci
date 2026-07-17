@@ -146,7 +146,12 @@ write_common_metrics() {
     echo "max_rss_kbytes=$(max_rss_kbytes)"
     if [[ -n "${SP1_HOST_BINARY:-}" ]]; then
       echo "host_binary=$SP1_HOST_BINARY"
-      echo "shard_size=${SHARD_SIZE:-default}"
+      local logged_shard_size
+      logged_shard_size="$(last_log_value shard_size)"
+      if [[ "$logged_shard_size" == "missing" ]]; then
+        logged_shard_size="${SHARD_SIZE:-default}"
+      fi
+      echo "shard_size=$logged_shard_size"
     fi
     local index label key phase_time_log
     for index in "${!timed_labels[@]}"; do

@@ -3,6 +3,7 @@ use amaci_proof_core::{
     sample_inputs,
 };
 use amaci_proof_core::{execute_proof_logic, ProverInput, PublicOutput};
+use sp1_core_executor::SP1CoreOpts;
 use sp1_sdk::blocking::{ProveRequest, Prover, ProverClient, SP1Stdin};
 use sp1_sdk::ProvingKey;
 use sp1_sdk::{include_elf, HashableKey, SP1Proof, SP1ProofWithPublicValues, SP1PublicValues};
@@ -15,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 const AMACI_SP1_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-program");
 const DEFAULT_CIRCUIT: &str = "process-messages-native-2-1-5-full";
+const DEFAULT_COMPRESSED_SHARD_SIZE: usize = 1 << 23;
+const MAX_COMPRESSED_SHARD_SIZE: usize = 1 << 24;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -625,7 +628,9 @@ fn prove_compressed(
     let input = built_in_input(circuit)?;
     let expected_output = execute_proof_logic(&input)?;
 
-    let client = ProverClient::builder().cpu().build();
+    let (core_opts, shard_size) = compressed_core_opts()?;
+    let client = ProverClient::builder().cpu().core_opts(core_opts).build();
+    println!("shard_size={shard_size}");
     let pk = client.setup(AMACI_SP1_ELF)?;
     let mut stdin = SP1Stdin::new();
     let input_bytes = encode_input(&input);
@@ -677,6 +682,29 @@ fn prove_compressed(
     }
 
     Ok(())
+}
+
+fn compressed_core_opts() -> Result<(SP1CoreOpts, usize), Box<dyn Error>> {
+    let configured = env::var("SHARD_SIZE").ok();
+    let shard_size = parse_compressed_shard_size(configured.as_deref())?;
+    let mut opts = SP1CoreOpts::default();
+    opts.shard_size = shard_size;
+    Ok((opts, shard_size))
+}
+
+fn parse_compressed_shard_size(configured: Option<&str>) -> Result<usize, String> {
+    let shard_size = match configured {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| format!("invalid SHARD_SIZE {value:?}: expected an integer"))?,
+        None => DEFAULT_COMPRESSED_SHARD_SIZE,
+    };
+    if shard_size == 0 || shard_size > MAX_COMPRESSED_SHARD_SIZE || !shard_size.is_power_of_two() {
+        return Err(format!(
+            "invalid SHARD_SIZE {shard_size}: expected a power of two up to {MAX_COMPRESSED_SHARD_SIZE}"
+        ));
+    }
+    Ok(shard_size)
 }
 
 fn execute(circuit: &str, public_path: Option<&Path>) -> Result<(), Box<dyn Error>> {
@@ -907,4 +935,29 @@ fn built_in_input(circuit: &str) -> Result<ProverInput, Box<dyn Error>> {
         )
         .into()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compressed_shard_size_defaults_to_benchmarked_value() {
+        assert_eq!(parse_compressed_shard_size(None).unwrap(), 1 << 23);
+    }
+
+    #[test]
+    fn compressed_shard_size_accepts_valid_override() {
+        assert_eq!(
+            parse_compressed_shard_size(Some("4194304")).unwrap(),
+            1 << 22
+        );
+    }
+
+    #[test]
+    fn compressed_shard_size_rejects_invalid_values() {
+        for value in ["0", "3", "33554432", "invalid"] {
+            assert!(parse_compressed_shard_size(Some(value)).is_err());
+        }
+    }
 }

@@ -199,6 +199,7 @@ dependencies = [
  "bincode",
  "serde_json",
  "sp1-build",
+ "sp1-core-executor",
  "sp1-sdk",
  "sp1-verifier",
  "tracing-subscriber 0.3.23",

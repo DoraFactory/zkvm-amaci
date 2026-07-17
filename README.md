@@ -272,6 +272,16 @@ nohup bash scripts/run_bench.sh sp1-compressed process-messages-native-2-1-5-ful
   > logs/bench-sp1-compressed-$(date +%Y%m%d-%H%M%S).out 2>&1 &
 ```
 
+Compressed proving defaults to `SHARD_SIZE=8388608` (`2^23`), selected from
+the local CPU benchmark as the best time/memory balance. Override it when
+profiling another machine or a larger guest workload:
+
+```bash
+nohup env SHARD_SIZE=4194304 \
+  bash scripts/run_bench.sh sp1-compressed process-messages-native-2-1-5-full \
+  > logs/bench-sp1-compressed-small-shard-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
 This writes:
 
 - full SDK proof: `sp1-proofs/*.sp1-compressed-proof.bin`;
