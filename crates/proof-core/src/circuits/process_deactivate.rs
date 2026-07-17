@@ -1,7 +1,8 @@
 use crate::auth::verify_command_auth_signature;
-use crate::circuits::process_messages::{message_chain, EmptyRule};
+use crate::circuits::process_messages::{
+    message_chain, message_to_command_with_decapsulator, EmptyRule,
+};
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash2};
-use crate::crypto::private_to_pub_key;
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
 use crate::hash_backend::hash_fields;
@@ -9,6 +10,7 @@ use crate::merkle::{
     check_inclusion, check_inclusion_digest, root_from_path, state_leaf_hash_digest,
 };
 use crate::native_types::field_to_digest;
+use crate::pq_kem::KemDecapsulator;
 use crate::public_output::{public_value, ProcessDeactivatePublicOutput};
 use crate::types::ProcessDeactivateInput;
 use num_traits::One;
@@ -42,7 +44,8 @@ pub fn execute(input: &ProcessDeactivateInput) -> ProofResult<ProcessDeactivateP
         });
     }
 
-    let derived = private_to_pub_key(&input.coord_priv_key);
+    let coord_decapsulator = KemDecapsulator::from_seed(&input.coord_priv_key);
+    let derived = coord_decapsulator.compact_public_key();
     if derived != input.coord_pub_key {
         return Err(ProofError::CommitmentMismatch {
             name: "coordPubKey",
@@ -79,7 +82,7 @@ pub fn execute(input: &ProcessDeactivateInput) -> ProofResult<ProcessDeactivateP
         ],
     )?;
 
-    let (active_root, deactivate_root) = process_batch(input)?;
+    let (active_root, deactivate_root) = process_batch(input, &coord_decapsulator)?;
     if deactivate_root != input.new_deactivate_root {
         return Err(ProofError::MerkleRootMismatch {
             name: "newDeactivateRoot",
@@ -152,7 +155,10 @@ fn validate_batch_witness_lengths(input: &ProcessDeactivateInput) -> ProofResult
     Ok(())
 }
 
-fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(Field, Field)> {
+fn process_batch(
+    input: &ProcessDeactivateInput,
+    coord_decapsulator: &KemDecapsulator,
+) -> ProofResult<(Field, Field)> {
     let mut active_root = input.current_active_state_root.clone();
     let mut deactivate_root = input.current_deactivate_root.clone();
 
@@ -161,7 +167,7 @@ fn process_batch(input: &ProcessDeactivateInput) -> ProofResult<(Field, Field)> 
         if is_empty {
             continue;
         }
-        let command = match decrypt_deactivate_command(input, i) {
+        let command = match decrypt_deactivate_command(input, coord_decapsulator, i) {
             Ok(command) => command,
             Err(ProofError::CiphertextAuthentication) => continue,
             Err(error) => return Err(error),
@@ -183,11 +189,12 @@ struct DeactivateCommand {
 
 fn decrypt_deactivate_command(
     input: &ProcessDeactivateInput,
+    coord_decapsulator: &KemDecapsulator,
     i: usize,
 ) -> ProofResult<DeactivateCommand> {
-    let cmd = crate::circuits::process_messages::message_to_command(
+    let cmd = message_to_command_with_decapsulator(
         &input.msgs[i],
-        &input.coord_priv_key,
+        coord_decapsulator,
         &input.enc_pub_keys[i],
         &input.kem_ciphertexts[i],
     )?;

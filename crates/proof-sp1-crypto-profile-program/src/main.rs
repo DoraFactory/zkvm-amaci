@@ -9,7 +9,7 @@ use amaci_proof_core::field::Field;
 use amaci_proof_core::hash_backend::hash_fields;
 use amaci_proof_core::pq_kem::{
     decapsulate_to_fields, encapsulate_to_public_key_for_testing, encapsulate_to_seed_for_testing,
-    kem_ciphertext_compact, kem_public_key_compact,
+    kem_ciphertext_compact, kem_public_key_compact, KemDecapsulator,
 };
 
 sp1_zkvm::entrypoint!(main);
@@ -19,6 +19,7 @@ const OP_KEM_ENCAP: u8 = 2;
 const OP_MLDSA_VERIFY: u8 = 3;
 const OP_KEM_COMPACT: u8 = 4;
 const OP_COMMAND_DECRYPT: u8 = 5;
+const OP_KEM_DECAP_REUSE: u8 = 6;
 
 pub fn main() {
     let input = sp1_zkvm::io::read_vec();
@@ -29,6 +30,7 @@ pub fn main() {
         OP_MLDSA_VERIFY => profile_mldsa_verify(iters),
         OP_KEM_COMPACT => profile_kem_compact(iters),
         OP_COMMAND_DECRYPT => profile_command_decrypt(iters),
+        OP_KEM_DECAP_REUSE => profile_kem_decap_reuse(iters),
         _ => panic!("unknown crypto profile op"),
     };
     sp1_zkvm::io::commit_slice(&out);
@@ -48,6 +50,20 @@ fn profile_kem_decap(iters: u32) -> [u8; 32] {
     let mut acc = Field::from(0u32);
     for _ in 0..iters {
         let shared = decapsulate_to_fields(&recipient_seed, &ciphertext).unwrap();
+        acc += &shared[0];
+        acc += &shared[1];
+    }
+    field_digest(&acc)
+}
+
+fn profile_kem_decap_reuse(iters: u32) -> [u8; 32] {
+    let recipient_seed = Field::from(1001u32);
+    let randomness = Field::from(2002u32);
+    let (ciphertext, _, _) = encapsulate_to_seed_for_testing(&recipient_seed, &randomness).unwrap();
+    let decapsulator = KemDecapsulator::from_seed(&recipient_seed);
+    let mut acc = Field::from(0u32);
+    for _ in 0..iters {
+        let shared = decapsulator.decapsulate_to_fields(&ciphertext).unwrap();
         acc += &shared[0];
         acc += &shared[1];
     }

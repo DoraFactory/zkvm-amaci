@@ -15,14 +15,40 @@ const KEM_COMPACT_DOMAIN: &[u8] = b"AMACI_ZKVM_ML_KEM768_COMPACT_V1";
 type MlKem768DecapsulationKey = DecapsulationKey<MlKem768>;
 type MlKem768EncapsulationKey = EncapsulationKey<MlKem768>;
 
+pub struct KemDecapsulator {
+    key: MlKem768DecapsulationKey,
+}
+
+impl KemDecapsulator {
+    pub fn from_seed(seed: &Field) -> Self {
+        Self {
+            key: MlKem768DecapsulationKey::from_seed(Seed::from(kem_seed(seed))),
+        }
+    }
+
+    pub fn public_key(&self) -> KemPublicKey {
+        let bytes = self.key.encapsulation_key().to_bytes();
+        fixed_public_key(bytes.as_ref())
+    }
+
+    pub fn compact_public_key(&self) -> PubKey {
+        kem_public_key_compact(&self.public_key())
+    }
+
+    pub fn decapsulate_to_fields(&self, ciphertext: &KemCiphertext) -> ProofResult<[Field; 2]> {
+        let ciphertext = Ciphertext::<MlKem768>::try_from(ciphertext.as_ref())
+            .map_err(|_| ProofError::Crypto("invalid ML-KEM-768 ciphertext length".to_string()))?;
+        let shared_key = self.key.decapsulate(&ciphertext);
+        Ok(shared_key_to_fields(shared_key.as_ref()))
+    }
+}
+
 pub fn private_to_pub_key(formatted_priv_key: &Field) -> PubKey {
-    let public_key = kem_public_key_from_seed_for_testing(formatted_priv_key);
-    kem_public_key_compact(&public_key)
+    KemDecapsulator::from_seed(formatted_priv_key).compact_public_key()
 }
 
 pub fn kem_public_key_from_seed_for_testing(seed: &Field) -> KemPublicKey {
-    let bytes = decapsulation_key(seed).encapsulation_key().to_bytes();
-    fixed_public_key(bytes.as_ref())
+    KemDecapsulator::from_seed(seed).public_key()
 }
 
 pub fn encapsulate_to_seed_for_testing(
@@ -56,10 +82,7 @@ pub fn decapsulate_to_fields(
     recipient_seed: &Field,
     ciphertext: &KemCiphertext,
 ) -> ProofResult<[Field; 2]> {
-    let ciphertext = Ciphertext::<MlKem768>::try_from(ciphertext.as_ref())
-        .map_err(|_| ProofError::Crypto("invalid ML-KEM-768 ciphertext length".to_string()))?;
-    let shared_key = decapsulation_key(recipient_seed).decapsulate(&ciphertext);
-    Ok(shared_key_to_fields(shared_key.as_ref()))
+    KemDecapsulator::from_seed(recipient_seed).decapsulate_to_fields(ciphertext)
 }
 
 pub fn kem_public_key_compact(public_key: &KemPublicKey) -> PubKey {
@@ -87,10 +110,6 @@ fn fixed_ciphertext(bytes: &[u8]) -> KemCiphertext {
 
 pub fn shared_key_hash_fields(shared_key: &[Field; 2]) -> Field {
     crate::hash_backend::hash_fields(shared_key)
-}
-
-fn decapsulation_key(seed: &Field) -> MlKem768DecapsulationKey {
-    MlKem768DecapsulationKey::from_seed(Seed::from(kem_seed(seed)))
 }
 
 fn kem_seed(seed: &Field) -> [u8; 64] {

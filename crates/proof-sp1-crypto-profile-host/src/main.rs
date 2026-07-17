@@ -24,6 +24,11 @@ const OPS: &[Op] = &[
         default_iters: 10,
     },
     Op {
+        id: 6,
+        name: "kem-decap-reuse",
+        default_iters: 10,
+    },
+    Op {
         id: 3,
         name: "mldsa-verify",
         default_iters: 10,

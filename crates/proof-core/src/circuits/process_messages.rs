@@ -1,6 +1,6 @@
 use crate::auth::verify_command_auth_signature;
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, hash2};
-use crate::crypto::{decrypt_authenticated_array, private_to_pub_key};
+use crate::crypto::decrypt_authenticated_array;
 use crate::error::{ProofError, ProofResult};
 use crate::field::{checked_add, checked_mul, checked_sub, ensure_bool, pow5, Field};
 use crate::merkle::{
@@ -11,6 +11,7 @@ use crate::native_types::field_to_digest;
 use crate::packing::{
     decode_vote_weight_96, unpack_element_high_to_low, unpack_process_messages_packed_vals,
 };
+use crate::pq_kem::KemDecapsulator;
 use crate::public_output::{public_value, ProcessMessagesPublicOutput};
 use crate::types::{KemCiphertext, Message, ProcessMessagesInput, StateLeaf};
 use num_traits::One;
@@ -79,7 +80,8 @@ pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPubli
         });
     }
 
-    let derived = private_to_pub_key(&input.coord_priv_key);
+    let coord_decapsulator = KemDecapsulator::from_seed(&input.coord_priv_key);
+    let derived = coord_decapsulator.compact_public_key();
     if derived != input.coord_pub_key {
         return Err(ProofError::CommitmentMismatch {
             name: "coordPubKey",
@@ -116,7 +118,7 @@ pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPubli
         ],
     )?;
 
-    let computed_new_root = process_batch(input, &packed)?;
+    let computed_new_root = process_batch(input, &packed, &coord_decapsulator)?;
     let expected_new_commitment = hash2(&computed_new_root, &input.new_state_salt);
     if expected_new_commitment != input.new_state_commitment {
         return Err(ProofError::CommitmentMismatch {
@@ -188,6 +190,16 @@ pub fn message_to_command(
     enc_pub_key: &[Field; 2],
     kem_ciphertext: &KemCiphertext,
 ) -> ProofResult<Command> {
+    let decapsulator = KemDecapsulator::from_seed(enc_priv_key);
+    message_to_command_with_decapsulator(message, &decapsulator, enc_pub_key, kem_ciphertext)
+}
+
+pub(crate) fn message_to_command_with_decapsulator(
+    message: &Message,
+    decapsulator: &KemDecapsulator,
+    enc_pub_key: &[Field; 2],
+    kem_ciphertext: &KemCiphertext,
+) -> ProofResult<Command> {
     let expected_compact = crate::pq_kem::kem_ciphertext_compact(kem_ciphertext);
     if &expected_compact != enc_pub_key {
         return Err(ProofError::CommitmentMismatch {
@@ -196,7 +208,7 @@ pub fn message_to_command(
             actual: crate::hash_backend::hash_fields(enc_pub_key),
         });
     }
-    let shared_key = crate::pq_kem::decapsulate_to_fields(enc_priv_key, kem_ciphertext)?;
+    let shared_key = decapsulator.decapsulate_to_fields(kem_ciphertext)?;
     let decrypted = decrypt_authenticated_array::<9>(message, &shared_key, &Field::from(0u32), 7)?;
     let unpacked = unpack_element_high_to_low(&decrypted[0], 7)?;
     let new_vote_weight = decode_vote_weight_96(&unpacked[1], &unpacked[2], &unpacked[3])?;
@@ -218,6 +230,7 @@ pub fn message_to_command(
 fn process_batch(
     input: &ProcessMessagesInput,
     packed: &crate::packing::ProcessMessagesPackedVals,
+    coord_decapsulator: &KemDecapsulator,
 ) -> ProofResult<Field> {
     let vo_tree_zero_root = zero_root(input.vote_option_tree_depth)?;
     let mut next_state_root = input.current_state_root;
@@ -227,9 +240,9 @@ fn process_batch(
         if is_empty {
             continue;
         }
-        let command = match message_to_command(
+        let command = match message_to_command_with_decapsulator(
             &input.msgs[i],
-            &input.coord_priv_key,
+            coord_decapsulator,
             &input.enc_pub_keys[i],
             &input.kem_ciphertexts[i],
         ) {

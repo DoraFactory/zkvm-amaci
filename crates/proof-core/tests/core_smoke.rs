@@ -21,6 +21,7 @@ use amaci_proof_core::packing::{
     decode_vote_weight_96, path_index_at, unpack_element_high_to_low,
     unpack_process_messages_packed_vals, unpack_tally_packed_vals,
 };
+use amaci_proof_core::pq_kem::KemDecapsulator;
 use amaci_proof_core::public_output::public_value;
 use amaci_proof_core::round_fixture::{
     fifteen_signup_round_fixture, fifty_signup_round_fixture, five_signup_round_fixture,
@@ -166,6 +167,15 @@ fn native_crypto_roundtrips() {
     let shared_recv =
         amaci_proof_core::pq_kem::decapsulate_to_fields(&kem_seed, &kem_ciphertext).unwrap();
     assert_eq!(shared_send, shared_recv);
+    let decapsulator = KemDecapsulator::from_seed(&kem_seed);
+    assert_eq!(
+        decapsulator.compact_public_key(),
+        private_to_pub_key(&kem_seed)
+    );
+    assert_eq!(
+        shared_send,
+        decapsulator.decapsulate_to_fields(&kem_ciphertext).unwrap()
+    );
 
     let key = [Field::from(11u32), Field::from(22u32)];
     let nonce = Field::from(7u32);

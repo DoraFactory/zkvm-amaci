@@ -96,7 +96,8 @@ append_summary() {
     printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_prove_elapsed_wall")"
     printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_prove_max_rss_kbytes")"
     printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_verify_elapsed_wall")"
-    printf "%s\n" "$(metric_value "$metric_file" "${key_prefix}_verify_max_rss_kbytes")"
+    printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_verify_max_rss_kbytes")"
+    printf "%s\n" "$(metric_value "$metric_file" shard_size)"
   } >> "$summary"
 }
 
@@ -108,7 +109,7 @@ append_native_summary() {
     printf "%s\t" "$(metric_value "$metric_file" avg_execute_ms)"
     printf "%s\t" "$(metric_value "$metric_file" input_bytes)"
     printf "%s\t" "$(metric_value "$metric_file" public_bytes)"
-    printf "missing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\n"
+    printf "missing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\tmissing\n"
   } >> "$summary"
 }
 
@@ -119,7 +120,7 @@ append_native_summary() {
   echo "circuits=${circuits[*]}"
 } > "$suite_log"
 
-printf "backend\tcircuit\tmetrics\tavg_execute_ms\tinput_bytes\tpublic_values_bytes\tinstructions\tsyscalls\ttouched_memory_addresses\tmax_rss_kbytes\tproof_bytes_raw\tproof_bytes_bincode\treceipt_bytes\texecute_elapsed_wall\tprove_elapsed_wall\tprove_max_rss_kbytes\tverify_elapsed_wall\tverify_max_rss_kbytes\n" > "$summary"
+printf "backend\tcircuit\tmetrics\tavg_execute_ms\tinput_bytes\tpublic_values_bytes\tinstructions\tsyscalls\ttouched_memory_addresses\tmax_rss_kbytes\tproof_bytes_raw\tproof_bytes_bincode\treceipt_bytes\texecute_elapsed_wall\tprove_elapsed_wall\tprove_max_rss_kbytes\tverify_elapsed_wall\tverify_max_rss_kbytes\tshard_size\n" > "$summary"
 
 for circuit in "${circuits[@]}"; do
   native_out="metrics/native-profile-${circuit}-${stamp}.txt"

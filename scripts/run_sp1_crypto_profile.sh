@@ -26,6 +26,7 @@ fi
 
 default_ops=(
   kem-decap
+  kem-decap-reuse
   kem-encap
   mldsa-verify
   kem-compact
