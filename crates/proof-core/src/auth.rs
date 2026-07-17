@@ -29,10 +29,10 @@ pub fn verify_command_auth_signature(
         return Ok(false);
     }
 
-    let encoded_key = EncodedVerifyingKey::<MlDsa65>::try_from(public_key.as_ref())
+    let encoded_key = EncodedVerifyingKey::<MlDsa65>::try_from(public_key.as_slice())
         .map_err(|_| ProofError::Crypto("invalid ML-DSA-65 public key length".to_string()))?;
     let verifying_key = VerifyingKey::<MlDsa65>::decode(&encoded_key);
-    let signature = Signature::<MlDsa65>::try_from(signature.as_ref())
+    let signature = Signature::<MlDsa65>::try_from(signature.as_slice())
         .map_err(|_| ProofError::Crypto("invalid ML-DSA-65 signature".to_string()))?;
     Ok(verifying_key
         .verify(&command_message(packed_command)?, &signature)
@@ -46,9 +46,7 @@ pub fn command_message(packed_command: &[Field; 3]) -> ProofResult<[u8; 32]> {
 pub fn auth_keypair_from_seed_for_testing(seed: &Field) -> (AuthPublicKey, SigningKey<MlDsa65>) {
     let ml_seed = ml_dsa::Seed::from(auth_seed(seed));
     let signing_key = SigningKey::<MlDsa65>::from_seed(&ml_seed);
-    let encoded = signing_key.verifying_key().encode();
-    let public_key = AuthPublicKey::from_slice(encoded.as_ref())
-        .expect("ML-DSA-65 produced fixed public key length");
+    let public_key = signing_key.verifying_key().encode().to_vec();
     (public_key, signing_key)
 }
 
@@ -56,8 +54,7 @@ pub fn sign_command_for_testing(seed: &Field, packed_command: &[Field; 3]) -> Au
     let (_, signing_key) = auth_keypair_from_seed_for_testing(seed);
     let signature: Signature<MlDsa65> = signing_key
         .sign(&command_message(packed_command).expect("test command fields fit native widths"));
-    AuthSignature::from_slice(signature.to_bytes().as_ref())
-        .expect("ML-DSA-65 produced fixed signature length")
+    signature.to_bytes().to_vec()
 }
 
 fn auth_seed(seed: &Field) -> [u8; 32] {

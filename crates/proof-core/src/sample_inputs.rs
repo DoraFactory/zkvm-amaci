@@ -10,8 +10,8 @@ use crate::field::Field;
 use crate::hash_backend::{hash_fields, hash_pair, hash_public_inputs, hash_state_leaf};
 use crate::merkle::{hash5_exact, root_from_path, state_leaf_hash, zero_root};
 use crate::{
-    AddNewKeyInput, AuthPublicKey, AuthSignature, KemCiphertext, Message, PathElement,
-    ProcessDeactivateInput, ProcessMessagesInput, ProverInput, TallyVotesInput, VOTE_ROW_WORDS,
+    AddNewKeyInput, KemCiphertext, Message, PathElement, ProcessDeactivateInput,
+    ProcessMessagesInput, ProverInput, TallyVotesInput, VOTE_ROW_WORDS,
 };
 use num_traits::ToPrimitive;
 
@@ -74,8 +74,8 @@ fn build_process_messages_input(
     let mut msgs = vec![[zero; 10]; batch_size];
     let mut enc_pub_keys = vec![[zero.clone(), zero.clone()]; batch_size];
     let mut kem_ciphertexts = vec![KemCiphertext::zero(); batch_size];
-    let mut auth_pub_keys = vec![AuthPublicKey::zero(); batch_size];
-    let mut auth_signatures = vec![AuthSignature::zero(); batch_size];
+    let mut auth_pub_keys = vec![Vec::new(); batch_size];
+    let mut auth_signatures = vec![Vec::new(); batch_size];
     let zero_state_leaf = [zero; 10];
     let zero_state_leaf_hash = hash_state_leaf(&zero_state_leaf)?;
     let mut current_state_leaves = vec![zero_state_leaf.clone(); batch_size];

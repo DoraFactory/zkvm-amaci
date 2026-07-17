@@ -479,21 +479,6 @@ fn compact_codec_roundtrips_all_built_in_inputs() {
 }
 
 #[test]
-fn fixed_auth_witness_preserves_compact_codec_layout() {
-    let process_messages =
-        amaci_proof_core::sample_inputs::built_in_input("process-messages-native-2-1-5-full")
-            .unwrap()
-            .unwrap();
-    assert_eq!(encode_input(&process_messages).len(), 39_467);
-
-    let process_deactivate =
-        amaci_proof_core::sample_inputs::built_in_input("five-signup-process-deactivate")
-            .unwrap()
-            .unwrap();
-    assert_eq!(encode_input(&process_deactivate).len(), 27_646);
-}
-
-#[test]
 fn five_signup_round_fixture_executes_and_links_public_state() {
     let fixture = five_signup_round_fixture().unwrap();
     assert_eq!(fixture.initial_signups, 5);
