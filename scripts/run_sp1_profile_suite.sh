@@ -76,6 +76,10 @@ append_summary() {
   local circuit="$2"
   local metric_file="$3"
   local key_prefix="${backend//-/_}"
+  local execute_elapsed_key="${key_prefix}_execute_elapsed_wall"
+  if [[ "$backend" == "sp1-execute" ]]; then
+    execute_elapsed_key="${key_prefix}_elapsed_wall"
+  fi
   {
     printf "%s\t%s\t%s\t" "$backend" "$circuit" "$metric_file"
     printf "%s\t" "$(metric_value "$metric_file" avg_execute_ms)"
@@ -88,7 +92,7 @@ append_summary() {
     printf "%s\t" "$(metric_value "$metric_file" proof_bytes_raw)"
     printf "%s\t" "$(metric_value "$metric_file" proof_bytes_bincode)"
     printf "%s\t" "$(metric_value "$metric_file" receipt_bytes)"
-    printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_execute_elapsed_wall")"
+    printf "%s\t" "$(metric_value "$metric_file" "$execute_elapsed_key")"
     printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_prove_elapsed_wall")"
     printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_prove_max_rss_kbytes")"
     printf "%s\t" "$(metric_value "$metric_file" "${key_prefix}_verify_elapsed_wall")"
