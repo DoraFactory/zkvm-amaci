@@ -11,6 +11,57 @@ use sha2::{Digest as Sha2Digest, Sha256};
 const AUTH_KEY_HASH_DOMAIN: &[u8] = b"AMACI_ZKVM_ML_DSA65_AUTH_KEY_V1";
 const AUTH_SEED_DOMAIN: &[u8] = b"AMACI_ZKVM_ML_DSA65_TEST_SEED_V1";
 
+struct CachedAuthVerifier {
+    public_key_hash: Field,
+    verifying_key: VerifyingKey<MlDsa65>,
+}
+
+pub struct CommandAuthVerifierCache {
+    entries: Vec<CachedAuthVerifier>,
+}
+
+impl CommandAuthVerifierCache {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn verify(
+        &mut self,
+        expected_public_key_hash: &Field,
+        public_key: &AuthPublicKey,
+        signature: &AuthSignature,
+        packed_command: &[Field; 3],
+    ) -> ProofResult<bool> {
+        let public_key_hash = auth_public_key_hash(public_key);
+        if &public_key_hash != expected_public_key_hash {
+            return Ok(false);
+        }
+        let verifier_index = self
+            .entries
+            .iter()
+            .position(|entry| entry.public_key_hash == public_key_hash);
+
+        let verifier_index = if let Some(index) = verifier_index {
+            index
+        } else {
+            let verifying_key = decode_verifying_key(public_key)?;
+            self.entries.push(CachedAuthVerifier {
+                public_key_hash,
+                verifying_key,
+            });
+            self.entries.len() - 1
+        };
+
+        verify_with_key(
+            &self.entries[verifier_index].verifying_key,
+            signature,
+            packed_command,
+        )
+    }
+}
+
 pub fn auth_public_key_hash(public_key: &[u8]) -> Field {
     let mut hasher = Sha256::new();
     hasher.update(AUTH_KEY_HASH_DOMAIN);
@@ -29,9 +80,21 @@ pub fn verify_command_auth_signature(
         return Ok(false);
     }
 
-    let encoded_key = EncodedVerifyingKey::<MlDsa65>::try_from(public_key.as_slice())
+    let verifying_key = decode_verifying_key(public_key)?;
+    verify_with_key(&verifying_key, signature, packed_command)
+}
+
+fn decode_verifying_key(public_key: &[u8]) -> ProofResult<VerifyingKey<MlDsa65>> {
+    let encoded_key = EncodedVerifyingKey::<MlDsa65>::try_from(public_key)
         .map_err(|_| ProofError::Crypto("invalid ML-DSA-65 public key length".to_string()))?;
-    let verifying_key = VerifyingKey::<MlDsa65>::decode(&encoded_key);
+    Ok(VerifyingKey::<MlDsa65>::decode(&encoded_key))
+}
+
+fn verify_with_key(
+    verifying_key: &VerifyingKey<MlDsa65>,
+    signature: &AuthSignature,
+    packed_command: &[Field; 3],
+) -> ProofResult<bool> {
     let signature = Signature::<MlDsa65>::try_from(signature.as_slice())
         .map_err(|_| ProofError::Crypto("invalid ML-DSA-65 signature".to_string()))?;
     Ok(verifying_key
@@ -62,4 +125,39 @@ fn auth_seed(seed: &Field) -> [u8; 32] {
     hasher.update(AUTH_SEED_DOMAIN);
     hasher.update(field_to_digest(seed));
     hasher.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifier_cache_reuses_an_expanded_public_key() {
+        let seed = Field::from(123u32);
+        let first_command = [Field::from(1u32), Field::from(2u32), Field::from(3u32)];
+        let second_command = [Field::from(4u32), Field::from(5u32), Field::from(6u32)];
+        let (public_key, _) = auth_keypair_from_seed_for_testing(&seed);
+        let public_key_hash = auth_public_key_hash(&public_key);
+        let first_signature = sign_command_for_testing(&seed, &first_command);
+        let second_signature = sign_command_for_testing(&seed, &second_command);
+        let mut cache = CommandAuthVerifierCache::with_capacity(2);
+
+        assert!(cache
+            .verify(
+                &public_key_hash,
+                &public_key,
+                &first_signature,
+                &first_command,
+            )
+            .unwrap());
+        assert!(cache
+            .verify(
+                &public_key_hash,
+                &public_key,
+                &second_signature,
+                &second_command,
+            )
+            .unwrap());
+        assert_eq!(cache.entries.len(), 1);
+    }
 }

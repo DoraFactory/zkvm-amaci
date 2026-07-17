@@ -1,4 +1,4 @@
-use crate::auth::verify_command_auth_signature;
+use crate::auth::CommandAuthVerifierCache;
 use crate::circuits::{assert_input_hash, coord_pub_key_hash, hash13, hash2};
 use crate::crypto::decrypt_authenticated_array;
 use crate::error::{ProofError, ProofResult};
@@ -234,6 +234,7 @@ fn process_batch(
 ) -> ProofResult<Field> {
     let vo_tree_zero_root = zero_root(input.vote_option_tree_depth)?;
     let mut next_state_root = input.current_state_root;
+    let mut auth_verifiers = CommandAuthVerifierCache::with_capacity(input.batch_size);
 
     for i in (0..input.batch_size).rev() {
         let is_empty = input.enc_pub_keys[i][0].is_zero();
@@ -257,6 +258,7 @@ fn process_batch(
             i,
             &next_state_root,
             &command,
+            &mut auth_verifiers,
         )?;
     }
 
@@ -270,6 +272,7 @@ fn process_one(
     i: usize,
     current_state_root: &Field,
     command: &Command,
+    auth_verifiers: &mut CommandAuthVerifierCache,
 ) -> ProofResult<Field> {
     let state_leaf = &input.current_state_leaves[i];
     let max_index = Field::from(pow5(5, input.state_tree_depth));
@@ -306,6 +309,7 @@ fn process_one(
         &input.current_vote_weights[i],
         i,
         command,
+        auth_verifiers,
     )?;
 
     let vote_index = if transform.valid {
@@ -375,6 +379,7 @@ fn state_leaf_transformer(
     current_votes_for_option: &Field,
     i: usize,
     command: &Command,
+    auth_verifiers: &mut CommandAuthVerifierCache,
 ) -> ProofResult<TransformResult> {
     let msg_valid = message_validator(
         packed,
@@ -384,6 +389,7 @@ fn state_leaf_transformer(
         current_votes_for_option,
         command,
         &input.expected_poll_id,
+        auth_verifiers,
     )?;
     Ok(TransformResult {
         valid: msg_valid.0,
@@ -404,13 +410,14 @@ fn message_validator(
     current_votes_for_option: &Field,
     command: &Command,
     expected_poll_id: &Field,
+    auth_verifiers: &mut CommandAuthVerifierCache,
 ) -> ProofResult<(bool, Field)> {
     let state_index_ok = command.state_index < packed.num_sign_ups;
     let vote_option_ok = command.vote_option_index < packed.max_vote_options;
     let nonce_ok = state_index_ok && state_leaf[4].checked_add(Field::one()) == Some(command.nonce);
     let poll_ok = command.poll_id == *expected_poll_id;
     let sig_ok = if state_index_ok && vote_option_ok && nonce_ok && poll_ok {
-        verify_command_auth_signature(
+        auth_verifiers.verify(
             &state_leaf[9],
             &input.auth_pub_keys[i],
             &input.auth_signatures[i],
