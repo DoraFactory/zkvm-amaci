@@ -1,0 +1,19 @@
+[package]
+name = "shake"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "SHAKE compatibility adapter backed by SP1-patched RustCrypto SHA3"
+publish = false
+
+[dependencies]
+sha3 = { version = "0.11.0", default-features = false }
+
+[dev-dependencies]
+hex-literal = "0.4"
+
+[features]
+default = ["alloc"]
+alloc = ["sha3/alloc"]
+zeroize = ["sha3/zeroize"]

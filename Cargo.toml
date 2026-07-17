@@ -14,6 +14,7 @@ members = [
     "crates/proof-sp1-crypto-profile-program",
     "crates/cosmwasm-sp1-verifier",
     "crates/cosmwasm-amaci-round",
+    "patches/shake",
 ]
 resolver = "2"
 
@@ -24,6 +25,7 @@ resolver = "2"
 [patch.crates-io]
 sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
 sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.11.0-sp1-6.0.0" }
+shake = { path = "patches/shake" }
 
 # RISC Zero guests are expensive to build without optimization.
 [profile.dev]
