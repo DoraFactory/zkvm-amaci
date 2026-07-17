@@ -1,4 +1,4 @@
-use crate::auth::CommandAuthVerifierCache;
+use crate::auth::verify_command_auth_signature;
 use crate::circuits::process_messages::{
     message_chain, message_to_command_with_decapsulator, EmptyRule,
 };
@@ -161,7 +161,6 @@ fn process_batch(
 ) -> ProofResult<(Field, Field)> {
     let mut active_root = input.current_active_state_root.clone();
     let mut deactivate_root = input.current_deactivate_root.clone();
-    let mut auth_verifiers = CommandAuthVerifierCache::with_capacity(input.batch_size);
 
     for i in 0..input.batch_size {
         let is_empty = input.msgs[i][0].is_zero();
@@ -173,14 +172,7 @@ fn process_batch(
             Err(ProofError::CiphertextAuthentication) => continue,
             Err(error) => return Err(error),
         };
-        let roots = process_one(
-            input,
-            i,
-            &active_root,
-            &deactivate_root,
-            &command,
-            &mut auth_verifiers,
-        )?;
+        let roots = process_one(input, i, &active_root, &deactivate_root, &command)?;
         active_root = roots.0;
         deactivate_root = roots.1;
     }
@@ -219,7 +211,6 @@ fn process_one(
     current_active_state_root: &Field,
     current_deactivate_root: &Field,
     command: &DeactivateCommand,
-    auth_verifiers: &mut CommandAuthVerifierCache,
 ) -> ProofResult<(Field, Field)> {
     let state_leaf = &input.current_state_leaves[i];
     let state_capacity = quin_capacity(input.state_tree_depth)?;
@@ -232,7 +223,7 @@ fn process_one(
     };
     let poll_ok = command.poll_id == input.expected_poll_id;
     let sig_ok = if poll_ok && state_index_ok {
-        auth_verifiers.verify(
+        verify_command_auth_signature(
             &state_leaf[9],
             &input.auth_pub_keys[i],
             &input.auth_signatures[i],
