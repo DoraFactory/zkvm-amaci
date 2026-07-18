@@ -23,15 +23,33 @@ impl NativeCommand {
     pub fn from_packed_fields(packed_command: &[Field; 3]) -> ProofResult<Self> {
         let chunks = unpack_element_high_to_low(&packed_command[0], 7)?;
         let new_vote_weight = decode_vote_weight_96(&chunks[1], &chunks[2], &chunks[3])?;
+        Self::from_fields(
+            &chunks[0],
+            &chunks[6],
+            &chunks[5],
+            &chunks[4],
+            &new_vote_weight,
+            &[packed_command[1], packed_command[2]],
+        )
+    }
+
+    pub(crate) fn from_fields(
+        poll_id: &Field,
+        nonce: &Field,
+        state_index: &Field,
+        vote_option_index: &Field,
+        new_vote_weight: &Field,
+        new_pub_key: &[Field; 2],
+    ) -> ProofResult<Self> {
         Ok(Self {
-            poll_id: to_u32("native command poll_id", &chunks[0])?,
-            nonce: to_u32("native command nonce", &chunks[6])?,
-            state_index: to_u32("native command state_index", &chunks[5])?,
-            vote_option_index: to_u32("native command vote_option_index", &chunks[4])?,
-            new_vote_weight: to_u128("native command new_vote_weight", &new_vote_weight)?,
+            poll_id: to_u32("native command poll_id", poll_id)?,
+            nonce: to_u32("native command nonce", nonce)?,
+            state_index: to_u32("native command state_index", state_index)?,
+            vote_option_index: to_u32("native command vote_option_index", vote_option_index)?,
+            new_vote_weight: to_u128("native command new_vote_weight", new_vote_weight)?,
             new_pub_key: [
-                field_to_digest(&packed_command[1]),
-                field_to_digest(&packed_command[2]),
+                field_to_digest(&new_pub_key[0]),
+                field_to_digest(&new_pub_key[1]),
             ],
         })
     }
@@ -72,4 +90,39 @@ fn to_u128(name: &'static str, value: &Field) -> ProofResult<u128> {
         value: value.clone(),
         max: Field::from(u128::MAX),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_command_matches_packed_command_digest() {
+        let poll_id = Field::from(7u32);
+        let nonce = Field::from(9u32);
+        let state_index = Field::from(11u32);
+        let vote_option_index = Field::from(3u32);
+        let new_vote_weight = Field::from(123_456_789u128);
+        let new_pub_key = [Field::from(101u32), Field::from(202u32)];
+        let packed = poll_id << 192usize
+            | new_vote_weight << 96usize
+            | vote_option_index << 64usize
+            | state_index << 32usize
+            | nonce;
+        let packed_command = [packed, new_pub_key[0], new_pub_key[1]];
+
+        let from_packed = NativeCommand::from_packed_fields(&packed_command).unwrap();
+        let from_fields = NativeCommand::from_fields(
+            &poll_id,
+            &nonce,
+            &state_index,
+            &vote_option_index,
+            &new_vote_weight,
+            &new_pub_key,
+        )
+        .unwrap();
+
+        assert_eq!(from_fields, from_packed);
+        assert_eq!(from_fields.message_digest(), from_packed.message_digest());
+    }
 }

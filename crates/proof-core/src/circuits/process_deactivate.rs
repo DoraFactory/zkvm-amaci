@@ -1,4 +1,4 @@
-use crate::auth::verify_command_auth_signature;
+use crate::auth::verify_command_auth_signature_message;
 use crate::circuits::process_messages::{
     message_chain, message_to_command_with_decapsulator, EmptyRule,
 };
@@ -10,6 +10,7 @@ use crate::merkle::{
     check_inclusion, check_inclusion_digest, root_from_path, state_leaf_hash_digest,
 };
 use crate::native_types::field_to_digest;
+use crate::native_types::NativeCommand;
 use crate::pq_kem::KemDecapsulator;
 use crate::public_output::{public_value, ProcessDeactivatePublicOutput};
 use crate::types::ProcessDeactivateInput;
@@ -184,7 +185,7 @@ fn process_batch(
 struct DeactivateCommand {
     state_index: Field,
     poll_id: Field,
-    packed_command: [Field; 3],
+    native_command: NativeCommand,
 }
 
 fn decrypt_deactivate_command(
@@ -201,7 +202,7 @@ fn decrypt_deactivate_command(
     Ok(DeactivateCommand {
         state_index: cmd.state_index,
         poll_id: cmd.poll_id,
-        packed_command: cmd.packed_command,
+        native_command: cmd.native_command,
     })
 }
 
@@ -223,11 +224,11 @@ fn process_one(
     };
     let poll_ok = command.poll_id == input.expected_poll_id;
     let sig_ok = if poll_ok && state_index_ok {
-        verify_command_auth_signature(
+        verify_command_auth_signature_message(
             &state_leaf[9],
             &input.auth_pub_keys[i],
             &input.auth_signatures[i],
-            &command.packed_command,
+            &command.native_command.message_digest(),
         )?
     } else {
         false

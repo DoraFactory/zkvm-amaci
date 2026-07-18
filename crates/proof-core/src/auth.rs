@@ -34,6 +34,17 @@ impl CommandAuthVerifierCache {
         signature: &AuthSignature,
         packed_command: &[Field; 3],
     ) -> ProofResult<bool> {
+        let message = command_message(packed_command)?;
+        self.verify_message(expected_public_key_hash, public_key, signature, &message)
+    }
+
+    pub fn verify_message(
+        &mut self,
+        expected_public_key_hash: &Field,
+        public_key: &AuthPublicKey,
+        signature: &AuthSignature,
+        message: &[u8; 32],
+    ) -> ProofResult<bool> {
         let public_key_hash = auth_public_key_hash(public_key);
         if &public_key_hash != expected_public_key_hash {
             return Ok(false);
@@ -54,10 +65,10 @@ impl CommandAuthVerifierCache {
             self.entries.len() - 1
         };
 
-        verify_with_key(
+        verify_message_with_key(
             &self.entries[verifier_index].verifying_key,
             signature,
-            packed_command,
+            message,
         )
     }
 }
@@ -84,6 +95,20 @@ pub fn verify_command_auth_signature(
     verify_with_key(&verifying_key, signature, packed_command)
 }
 
+pub(crate) fn verify_command_auth_signature_message(
+    expected_public_key_hash: &Field,
+    public_key: &AuthPublicKey,
+    signature: &AuthSignature,
+    message: &[u8; 32],
+) -> ProofResult<bool> {
+    if &auth_public_key_hash(public_key) != expected_public_key_hash {
+        return Ok(false);
+    }
+
+    let verifying_key = decode_verifying_key(public_key)?;
+    verify_message_with_key(&verifying_key, signature, message)
+}
+
 fn decode_verifying_key(public_key: &[u8]) -> ProofResult<VerifyingKey<MlDsa65>> {
     let encoded_key = EncodedVerifyingKey::<MlDsa65>::try_from(public_key)
         .map_err(|_| ProofError::Crypto("invalid ML-DSA-65 public key length".to_string()))?;
@@ -95,11 +120,17 @@ fn verify_with_key(
     signature: &AuthSignature,
     packed_command: &[Field; 3],
 ) -> ProofResult<bool> {
+    verify_message_with_key(verifying_key, signature, &command_message(packed_command)?)
+}
+
+fn verify_message_with_key(
+    verifying_key: &VerifyingKey<MlDsa65>,
+    signature: &AuthSignature,
+    message: &[u8; 32],
+) -> ProofResult<bool> {
     let signature = Signature::<MlDsa65>::try_from(signature.as_slice())
         .map_err(|_| ProofError::Crypto("invalid ML-DSA-65 signature".to_string()))?;
-    Ok(verifying_key
-        .verify(&command_message(packed_command)?, &signature)
-        .is_ok())
+    Ok(verifying_key.verify(message, &signature).is_ok())
 }
 
 pub fn command_message(packed_command: &[Field; 3]) -> ProofResult<[u8; 32]> {

@@ -8,6 +8,7 @@ use crate::merkle::{
     state_leaf_hash_digest, zero_root,
 };
 use crate::native_types::field_to_digest;
+use crate::native_types::NativeCommand;
 use crate::packing::{
     decode_vote_weight_96, unpack_element_high_to_low, unpack_process_messages_packed_vals,
 };
@@ -181,7 +182,7 @@ pub struct Command {
     pub nonce: Field,
     pub poll_id: Field,
     pub new_pub_key: [Field; 2],
-    pub packed_command: [Field; 3],
+    pub native_command: NativeCommand,
 }
 
 pub fn message_to_command(
@@ -212,18 +213,23 @@ pub(crate) fn message_to_command_with_decapsulator(
     let decrypted = decrypt_authenticated_array::<9>(message, &shared_key, &Field::from(0u32), 7)?;
     let unpacked = unpack_element_high_to_low(&decrypted[0], 7)?;
     let new_vote_weight = decode_vote_weight_96(&unpacked[1], &unpacked[2], &unpacked[3])?;
+    let new_pub_key = [decrypted[1], decrypted[2]];
+    let native_command = NativeCommand::from_fields(
+        &unpacked[0],
+        &unpacked[6],
+        &unpacked[5],
+        &unpacked[4],
+        &new_vote_weight,
+        &new_pub_key,
+    )?;
     Ok(Command {
         poll_id: unpacked[0].clone(),
         nonce: unpacked[6].clone(),
         state_index: unpacked[5].clone(),
         vote_option_index: unpacked[4].clone(),
         new_vote_weight,
-        new_pub_key: [decrypted[1].clone(), decrypted[2].clone()],
-        packed_command: [
-            decrypted[0].clone(),
-            decrypted[1].clone(),
-            decrypted[2].clone(),
-        ],
+        new_pub_key,
+        native_command,
     })
 }
 
@@ -417,11 +423,11 @@ fn message_validator(
     let nonce_ok = state_index_ok && state_leaf[4].checked_add(Field::one()) == Some(command.nonce);
     let poll_ok = command.poll_id == *expected_poll_id;
     let sig_ok = if state_index_ok && vote_option_ok && nonce_ok && poll_ok {
-        auth_verifiers.verify(
+        auth_verifiers.verify_message(
             &state_leaf[9],
             &input.auth_pub_keys[i],
             &input.auth_signatures[i],
-            &command.packed_command,
+            &command.native_command.message_digest(),
         )?
     } else {
         false
