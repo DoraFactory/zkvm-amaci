@@ -17,7 +17,7 @@ use amaci_proof_core::error::ProofError;
 use amaci_proof_core::field::{checked_add, checked_mul, checked_sub, ensure_bits, field, two_pow};
 use amaci_proof_core::hash_backend::{hash_fields, hash_pair, hash_public_inputs};
 use amaci_proof_core::merkle::{
-    check_root, hash10_digest, hash10_exact, hash5_exact, root_from_path,
+    check_root, hash10_digest, hash10_exact, hash5_exact, root_from_path, zero_root,
 };
 use amaci_proof_core::native_types::field_to_digest;
 use amaci_proof_core::packing::{
@@ -142,6 +142,16 @@ fn merkle_helpers_validate_quin_arity_and_path_widths() {
         check_root(&vec![Field::from(0u32); 4], 1).unwrap_err(),
         "quin check root leaves",
     );
+}
+
+#[test]
+fn zero_roots_match_explicit_quin_hashes() {
+    let zero = Field::from(0u32);
+    let depth_one = hash5_exact(&[zero; 5]).unwrap();
+    let depth_two = hash5_exact(&[depth_one; 5]).unwrap();
+    assert_eq!(zero_root(0).unwrap(), zero);
+    assert_eq!(zero_root(1).unwrap(), depth_one);
+    assert_eq!(zero_root(2).unwrap(), depth_two);
 }
 
 #[test]
