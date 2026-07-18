@@ -56,6 +56,7 @@ mkdir -p logs metrics sp1-proofs
 log="logs/sp1-aggregate-tally-${stamp}.log"
 time_log="metrics/sp1-aggregate-tally-${stamp}.time.txt"
 metrics="metrics/sp1-aggregate-tally-${stamp}.metrics.txt"
+host_binary="$target_dir/release/amaci-proof-sp1-aggregate-host"
 
 proof="sp1-proofs/${aggregate_prefix}.aggregate.sp1-compressed-proof.bin"
 proof_bytes="sp1-proofs/${aggregate_prefix}.aggregate.sp1-compressed-proof.bytes"
@@ -80,11 +81,16 @@ done
   echo "vkey=$vkey"
 } > "$log"
 
-/usr/bin/time -v -o "$time_log" \
+{
+  echo "== sp1 aggregate host build start $(date -Is) =="
   env CARGO_TARGET_DIR="$target_dir" \
-    cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-aggregate-host -- \
-      aggregate-tally \
+    cargo --config configs/cargo-sp1-native-patches.toml build --release \
+      -p amaci-proof-sp1-aggregate-host
+  echo "== sp1 aggregate host build end $(date -Is) =="
+} >> "$log" 2>&1
+
+/usr/bin/time -v -o "$time_log" \
+  "$host_binary" aggregate-tally \
       "${child_args[@]}" \
       --proof "$proof" \
       --proof-bytes "$proof_bytes" \
@@ -99,6 +105,7 @@ done
   echo "log=$log"
   echo "time_log=$time_log"
   echo "target_dir=$target_dir"
+  echo "host_binary=$host_binary"
   echo "aggregate_prefix=$aggregate_prefix"
   printf "child_msgs=%s\n" "${child_msgs[*]}"
   echo "child_count=${#child_msgs[@]}"

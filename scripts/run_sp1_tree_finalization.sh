@@ -40,6 +40,7 @@ log="logs/sp1-tree-${prefix}-${stamp}.log"
 time_log="metrics/sp1-tree-${prefix}-${stamp}.time.txt"
 metrics="metrics/sp1-tree-${prefix}-${stamp}.metrics.txt"
 archive="sp1-proofs/${prefix}-tree-finalization-artifacts.tar.gz"
+host_binary="$target_dir/release/amaci-proof-sp1-tree-host"
 
 mkdir -p logs metrics sp1-proofs "$output_dir"
 
@@ -84,15 +85,15 @@ tree_args+=(--output-dir "$output_dir")
   echo "process_messages_leaf_count=$process_count"
   echo "tally_leaf_count=$tally_count"
   echo "output_dir=$output_dir"
-  /usr/bin/time -v -o "$time_log" \
-    env CARGO_TARGET_DIR="$target_dir" \
-    cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-tree-host -- "${tree_args[@]}"
-
+  echo "== sp1 tree host build start $(date -Is) =="
   env CARGO_TARGET_DIR="$target_dir" \
-    cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-tree-host -- \
-      verify-finalization \
+    cargo --config configs/cargo-sp1-native-patches.toml build --release \
+      -p amaci-proof-sp1-tree-host
+  echo "== sp1 tree host build end $(date -Is) =="
+  /usr/bin/time -v -o "$time_log" \
+    "$host_binary" "${tree_args[@]}"
+
+  "$host_binary" verify-finalization \
       --proof-bytes "$output_dir/finalization-root.proof.bytes" \
       --public-bytes "$output_dir/finalization-root.public.bin" \
       --vkey "$output_dir/finalization-root.vkey.bin"
@@ -118,6 +119,7 @@ tree_args+=(--output-dir "$output_dir")
     echo "process_messages_leaf_count=$process_count"
     echo "tally_leaf_count=$tally_count"
     echo "target_dir=$target_dir"
+    echo "host_binary=$host_binary"
     echo "output_dir=$output_dir"
     echo "log=$log"
     echo "time_log=$time_log"

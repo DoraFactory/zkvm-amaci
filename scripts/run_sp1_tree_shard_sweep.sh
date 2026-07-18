@@ -41,6 +41,7 @@ target_dir="${SP1_TARGET_DIR:-/tmp/zkvm-amaci-sp1-tree-shard-sweep-target}"
 stamp="$(date +%Y%m%d-%H%M%S)"
 suite_log="logs/sp1-tree-shard-sweep-${stamp}.out"
 summary="metrics/sp1-tree-shard-sweep-${prefix}-${stamp}.summary.tsv"
+host_binary="$target_dir/release/amaci-proof-sp1-tree-host"
 
 if [[ -n "${SHARD_SIZES:-}" ]]; then
   # shellcheck disable=SC2206
@@ -67,6 +68,14 @@ done
 mkdir -p logs metrics sp1-proofs
 printf "shard_size\telapsed_wall\tmax_rss_kbytes\tprocess_node_elapsed_ms\ttally_node_elapsed_ms\tfinalization_elapsed_ms\tproof_bytes\tverify\n" > "$summary"
 
+{
+  echo "== sp1 tree host build start $(date -Is) =="
+  env CARGO_TARGET_DIR="$target_dir" \
+    cargo --config configs/cargo-sp1-native-patches.toml build --release \
+      -p amaci-proof-sp1-tree-host
+  echo "== sp1 tree host build end $(date -Is) =="
+} >> "$suite_log" 2>&1
+
 for shard_size in "${shard_sizes[@]}"; do
   if ! [[ "$shard_size" =~ ^[0-9]+$ ]] \
     || (( shard_size <= 0 || shard_size > 16777216 || (shard_size & (shard_size - 1)) != 0 )); then
@@ -88,15 +97,10 @@ for shard_size in "${shard_sizes[@]}"; do
 
   echo "== shard_size=$shard_size start $(date -Is) ==" | tee -a "$suite_log"
   /usr/bin/time -v -o "$time_log" \
-    env SHARD_SIZE="$shard_size" CARGO_TARGET_DIR="$target_dir" \
-    cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-tree-host -- "${args[@]}" \
+    env SHARD_SIZE="$shard_size" "$host_binary" "${args[@]}" \
       > "$run_log" 2>&1
 
-  env CARGO_TARGET_DIR="$target_dir" \
-    cargo --config configs/cargo-sp1-native-patches.toml run --release \
-      -p amaci-proof-sp1-tree-host -- \
-      verify-finalization \
+  "$host_binary" verify-finalization \
       --proof-bytes "$output_dir/finalization-root.proof.bytes" \
       --public-bytes "$output_dir/finalization-root.public.bin" \
       --vkey "$output_dir/finalization-root.vkey.bin" \

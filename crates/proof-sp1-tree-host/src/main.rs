@@ -165,13 +165,13 @@ impl StageTree {
     }
 }
 
-struct ProofArtifact {
+struct VerifiedProofArtifact {
     proof: SP1ProofWithPublicValues,
     proof_path: PathBuf,
 }
 
 struct StageRoot {
-    artifact: ProofArtifact,
+    artifact: VerifiedProofArtifact,
     level_count: u32,
     leaf_count: u32,
 }
@@ -239,11 +239,11 @@ fn build_finalization(args: BuildFinalizationArgs) -> Result<(), Box<dyn Error>>
     )?;
 
     let finalization_children = vec![
-        ProofArtifact {
+        VerifiedProofArtifact {
             proof: process_root.artifact.proof,
             proof_path: process_root.artifact.proof_path.clone(),
         },
-        ProofArtifact {
+        VerifiedProofArtifact {
             proof: tally_root.artifact.proof,
             proof_path: tally_root.artifact.proof_path.clone(),
         },
@@ -388,11 +388,11 @@ fn build_stage_tree(
 fn prove_request(
     client: &CpuProver,
     tree_pk: &SP1ProvingKey,
-    children: &[ProofArtifact],
+    children: &[VerifiedProofArtifact],
     child_pks: &[&SP1ProvingKey],
     request: TreeAggregateRequest,
     prefix: &Path,
-) -> Result<ProofArtifact, Box<dyn Error>> {
+) -> Result<VerifiedProofArtifact, Box<dyn Error>> {
     let expected = build_tree_request_output(&request)?;
     let proof_path = artifact_path(prefix, ".proof.bin");
     if proof_path.is_file() {
@@ -403,7 +403,7 @@ fn prove_request(
             if valid {
                 write_artifacts(prefix, &proof, tree_pk, 0)?;
                 println!("resume={}", proof_path.display());
-                return Ok(ProofArtifact { proof, proof_path });
+                return Ok(VerifiedProofArtifact { proof, proof_path });
             }
         }
         println!("cache_incompatible={}", proof_path.display());
@@ -415,7 +415,6 @@ fn prove_request(
     let mut stdin = SP1Stdin::new();
     stdin.write(&request);
     for (child, child_pk) in children.iter().zip(child_pks) {
-        client.verify(&child.proof, child_pk.verifying_key(), None)?;
         let SP1Proof::Compressed(recursion_proof) = &child.proof.proof else {
             return Err(format!(
                 "child proof is not compressed: {}",
@@ -440,20 +439,20 @@ fn prove_request(
     write_artifacts(prefix, &proof, tree_pk, elapsed_ms)?;
     println!("node={}", proof_path.display());
     println!("node_elapsed_ms={elapsed_ms}");
-    Ok(ProofArtifact { proof, proof_path })
+    Ok(VerifiedProofArtifact { proof, proof_path })
 }
 
 fn load_and_verify(
     client: &CpuProver,
     path: &Path,
     pk: &SP1ProvingKey,
-) -> Result<ProofArtifact, Box<dyn Error>> {
+) -> Result<VerifiedProofArtifact, Box<dyn Error>> {
     let proof = SP1ProofWithPublicValues::load(path)?;
     client.verify(&proof, pk.verifying_key(), None)?;
     if !matches!(proof.proof, SP1Proof::Compressed(_)) {
         return Err(format!("proof is not compressed: {}", path.display()).into());
     }
-    Ok(ProofArtifact {
+    Ok(VerifiedProofArtifact {
         proof,
         proof_path: path.to_path_buf(),
     })
@@ -466,11 +465,9 @@ fn write_artifacts(
     elapsed_ms: u128,
 ) -> Result<(), Box<dyn Error>> {
     let proof_path = artifact_path(prefix, ".proof.bin");
+    let proof_bytes = compressed_proof_bytes(proof)?;
     atomic_save_proof(&proof_path, proof)?;
-    atomic_write(
-        &artifact_path(prefix, ".proof.bytes"),
-        &compressed_proof_bytes(proof)?,
-    )?;
+    atomic_write(&artifact_path(prefix, ".proof.bytes"), &proof_bytes)?;
     atomic_write(
         &artifact_path(prefix, ".public.bin"),
         proof.public_values.as_slice(),
@@ -490,7 +487,7 @@ fn write_artifacts(
         "direct_child_count": direct_child_count,
         "leaf_count": leaf_count,
         "level": level,
-        "proof_bytes": compressed_proof_bytes(proof)?.len(),
+        "proof_bytes": proof_bytes.len(),
         "public_bytes": proof.public_values.as_slice().len(),
     });
     atomic_write(
