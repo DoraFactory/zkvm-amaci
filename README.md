@@ -282,8 +282,10 @@ nohup env SHARD_SIZE=4194304 \
   > logs/bench-sp1-compressed-small-shard-$(date +%Y%m%d-%H%M%S).out 2>&1 &
 ```
 
-The aggregate and tree hosts use the same validated default and accept the
-same override. To benchmark recursive tree proving without regenerating child
+The aggregate host uses the same validated `2^23` default. Recursive tree
+proving defaults to `2^24`: a separate recursive benchmark found the same
+runtime but lower peak memory than smaller shards. Both hosts accept the same
+override. To benchmark recursive tree proving without regenerating child
 proofs, run:
 
 ```bash

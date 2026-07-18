@@ -108,6 +108,23 @@ are intentionally incompatible with this lifecycle.
 - `scripts/run_sp1_tree_finalization.sh`: generic finalization tree runner.
 - `scripts/run_fifty_signup_sp1_tree_e2e.sh`: complete 50-signup proving suite.
 
+## Recursive Shard Benchmark
+
+The tree host defaults to `SHARD_SIZE=16777216` (`2^24`). This is intentionally
+different from the `2^23` base-program default. A three-node recursive sample
+(one ProcessMessages leaf node, one Tally leaf node and one finalization node)
+produced the following results on the 64 GiB CPU prover:
+
+| Shard size | Wall time | Peak RSS (KB) | Final proof bytes |
+| ---: | ---: | ---: | ---: |
+| 16,777,216 | 3:06.09 | 22,751,440 | 1,272,546 |
+| 8,388,608 | 3:05.76 | 27,662,616 | 1,272,546 |
+| 4,194,304 | 3:07.60 | 26,172,816 | 1,272,546 |
+
+The smaller shards did not materially improve runtime and increased peak RSS
+for this recursive workload. Re-run `scripts/run_sp1_tree_shard_sweep.sh` when
+the SP1 version, prover hardware or recursive guest changes.
+
 ## High-Performance Machine
 
 Run the complete 50-signup suite in the background:

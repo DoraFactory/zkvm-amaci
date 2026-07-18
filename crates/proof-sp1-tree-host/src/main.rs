@@ -20,7 +20,7 @@ use std::time::Instant;
 
 const AMACI_SP1_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-program");
 const AMACI_SP1_TREE_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-tree-program");
-const DEFAULT_COMPRESSED_SHARD_SIZE: usize = 1 << 23;
+const DEFAULT_COMPRESSED_SHARD_SIZE: usize = 1 << 24;
 const MAX_COMPRESSED_SHARD_SIZE: usize = 1 << 24;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn compressed_shard_size_defaults_to_benchmarked_value() {
-        assert_eq!(parse_compressed_shard_size(None).unwrap(), 1 << 23);
+        assert_eq!(parse_compressed_shard_size(None).unwrap(), 1 << 24);
     }
 
     #[test]

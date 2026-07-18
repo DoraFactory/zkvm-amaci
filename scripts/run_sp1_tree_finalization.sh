@@ -12,7 +12,7 @@ root proof. ProcessDeactivate and AddNewKey remain online contract proofs.
 
 Environment:
   CARGO_TARGET_DIR  Cargo target directory. Default: /tmp/zkvm-amaci-sp1-tree-target
-  SHARD_SIZE        SP1 core shard size. Default: 8388608
+  SHARD_SIZE        SP1 core shard size. Default: 16777216
 USAGE
 }
 
