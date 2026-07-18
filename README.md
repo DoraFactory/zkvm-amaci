@@ -299,11 +299,6 @@ nohup env \
 Each value writes to a separate tree output directory so an existing recursive
 node cache cannot distort the proving measurements.
 
-On machines with enough memory, `TREE_JOBS=2` builds the ProcessMessages and
-Tally stage trees concurrently. The default remains `1`; each compressed
-recursive prover can consume tens of gigabytes, so enable two jobs only after
-measuring the target machine.
-
 This writes:
 
 - full SDK proof: `sp1-proofs/*.sp1-compressed-proof.bin`;
