@@ -362,6 +362,34 @@ fn add_new_key_cannot_use_a_leaf_from_an_invalid_deactivate() {
     ));
 }
 
+#[test]
+fn process_deactivate_rejects_mismatched_kem_ciphertext_witness() {
+    let mut input = single_deactivate_input();
+    input.deactivate_kem_ciphertexts[0].0[0] ^= 1;
+    input.input_hash = hash_public_inputs(&[
+        input.new_deactivate_root,
+        hash_fields(&input.coord_pub_key),
+        input.batch_start_hash,
+        input.batch_end_hash,
+        input.current_deactivate_commitment,
+        input.new_deactivate_commitment,
+        input.current_state_root,
+        input.expected_poll_id,
+    ]);
+
+    let error = execute_proof_logic(&ProverInput::ProcessDeactivate(input)).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ProofError::CommitmentMismatch {
+                name: "deactivateKemCiphertext",
+                ..
+            }
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
 fn single_deactivate_input() -> amaci_proof_core::types::ProcessDeactivateInput {
     let mut input = amaci_proof_core::sample_inputs::process_deactivate_native_2_5().unwrap();
     input.batch_size = 1;

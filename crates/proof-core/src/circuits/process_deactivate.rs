@@ -262,15 +262,17 @@ fn process_one(
             actual: hash_fields(&expected_user_kem_key),
         });
     }
-    let (expected_deactivate_ciphertext, expected_c1, shared_key) =
-        crate::pq_kem::encapsulate_to_public_key_for_testing(
+    let (expected_deactivate_ciphertext, shared_key) =
+        crate::pq_kem::encapsulate_raw_to_public_key_for_testing(
             &input.deactivate_kem_pub_keys[i],
             &input.deactivate_kem_randomness[i],
         )?;
     if expected_deactivate_ciphertext != input.deactivate_kem_ciphertexts[i] {
         return Err(ProofError::CommitmentMismatch {
             name: "deactivateKemCiphertext",
-            expected: hash_fields(&expected_c1),
+            expected: hash_fields(&crate::pq_kem::kem_ciphertext_compact(
+                &expected_deactivate_ciphertext,
+            )),
             actual: hash_fields(&crate::pq_kem::kem_ciphertext_compact(
                 &input.deactivate_kem_ciphertexts[i],
             )),

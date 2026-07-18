@@ -63,6 +63,16 @@ pub fn encapsulate_to_public_key_for_testing(
     public_key: &KemPublicKey,
     randomness: &Field,
 ) -> ProofResult<(KemCiphertext, PubKey, [Field; 2])> {
+    let (ciphertext, shared_key) =
+        encapsulate_raw_to_public_key_for_testing(public_key, randomness)?;
+    let compact = kem_ciphertext_compact(&ciphertext);
+    Ok((ciphertext, compact, shared_key))
+}
+
+pub(crate) fn encapsulate_raw_to_public_key_for_testing(
+    public_key: &KemPublicKey,
+    randomness: &Field,
+) -> ProofResult<(KemCiphertext, [Field; 2])> {
     let key = ml_kem::kem::Key::<MlKem768EncapsulationKey>::try_from(public_key.as_ref())
         .map_err(|_| ProofError::Crypto("invalid ML-KEM-768 public key length".to_string()))?;
     let encapsulation_key = MlKem768EncapsulationKey::new(&key)
@@ -70,12 +80,7 @@ pub fn encapsulate_to_public_key_for_testing(
     let (ciphertext, shared_key) =
         encapsulation_key.encapsulate_deterministic(&B32::from(encapsulation_seed(randomness)));
     let ciphertext = fixed_ciphertext(ciphertext.as_ref());
-    let compact = kem_ciphertext_compact(&ciphertext);
-    Ok((
-        ciphertext,
-        compact,
-        shared_key_to_fields(shared_key.as_ref()),
-    ))
+    Ok((ciphertext, shared_key_to_fields(shared_key.as_ref())))
 }
 
 pub fn decapsulate_to_fields(

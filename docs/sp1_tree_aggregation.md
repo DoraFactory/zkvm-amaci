@@ -125,6 +125,13 @@ The smaller shards did not materially improve runtime and increased peak RSS
 for this recursive workload. Re-run `scripts/run_sp1_tree_shard_sweep.sh` when
 the SP1 version, prover hardware or recursive guest changes.
 
+Running the ProcessMessages and Tally stage provers concurrently in one process
+was also evaluated on the same sample. Serial execution took `3:02.78` with a
+peak RSS of `25,848,260` KB; two concurrent stage jobs took `3:03.15` with a
+peak RSS of `25,650,356` KB. SP1 prover contention removed the expected overlap,
+so the tree scheduler intentionally remains serial. Independent stage trees can
+still be distributed across separate prover machines by the operator.
+
 ## High-Performance Machine
 
 Run the complete 50-signup suite in the background:
