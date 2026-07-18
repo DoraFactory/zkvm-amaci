@@ -36,22 +36,30 @@ pub fn unpack_element_high_to_low(value: &Field, chunks: usize) -> ProofResult<V
     Ok(out)
 }
 
+pub fn unpack_element_high_to_low_array<const N: usize>(value: &Field) -> ProofResult<[Field; N]> {
+    ensure_bits("packed element", value, N * 32)?;
+    let mask = (Field::from(1u32) << 32usize) - Field::from(1u32);
+    Ok(std::array::from_fn(|index| {
+        (*value >> ((N - 1 - index) * 32usize)) & mask
+    }))
+}
+
 pub fn unpack_process_messages_packed_vals(
     packed_vals: &Field,
 ) -> ProofResult<ProcessMessagesPackedVals> {
-    let chunks = unpack_element_high_to_low(packed_vals, 3)?;
+    let chunks = unpack_element_high_to_low_array::<3>(packed_vals)?;
     Ok(ProcessMessagesPackedVals {
-        is_quadratic_cost: chunks[0].clone(),
-        num_sign_ups: chunks[1].clone(),
-        max_vote_options: chunks[2].clone(),
+        is_quadratic_cost: chunks[0],
+        num_sign_ups: chunks[1],
+        max_vote_options: chunks[2],
     })
 }
 
 pub fn unpack_tally_packed_vals(packed_vals: &Field) -> ProofResult<TallyPackedVals> {
-    let chunks = unpack_element_high_to_low(packed_vals, 2)?;
+    let chunks = unpack_element_high_to_low_array::<2>(packed_vals)?;
     Ok(TallyPackedVals {
-        num_sign_ups: chunks[0].clone(),
-        batch_num: chunks[1].clone(),
+        num_sign_ups: chunks[0],
+        batch_num: chunks[1],
     })
 }
 

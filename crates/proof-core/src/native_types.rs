@@ -1,6 +1,6 @@
 use crate::error::{ProofError, ProofResult};
 use crate::field::Field;
-use crate::packing::{decode_vote_weight_96, unpack_element_high_to_low};
+use crate::packing::{decode_vote_weight_96, unpack_element_high_to_low_array};
 use num_traits::ToPrimitive;
 use sha2::{Digest as Sha2Digest, Sha256};
 
@@ -21,7 +21,7 @@ pub struct NativeCommand {
 
 impl NativeCommand {
     pub fn from_packed_fields(packed_command: &[Field; 3]) -> ProofResult<Self> {
-        let chunks = unpack_element_high_to_low(&packed_command[0], 7)?;
+        let chunks = unpack_element_high_to_low_array::<7>(&packed_command[0])?;
         let new_vote_weight = decode_vote_weight_96(&chunks[1], &chunks[2], &chunks[3])?;
         Self::from_fields(
             &chunks[0],

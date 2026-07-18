@@ -40,6 +40,21 @@ pub fn hash_state_leaf(row: &[Field]) -> ProofResult<Field> {
     Ok(sha256_field_hash(NATIVE_HASH_DOMAIN, row))
 }
 
+pub(crate) fn hash_state_leaf_digest(row: &[Field]) -> ProofResult<Digest> {
+    if row.len() != 10 {
+        return Err(ProofError::InvalidLength {
+            name: "state leaf",
+            expected: 10,
+            actual: row.len(),
+        });
+    }
+    Ok(sha256_field_hash_iter_digest(
+        NATIVE_HASH_DOMAIN,
+        row.len(),
+        row.iter(),
+    ))
+}
+
 pub fn hash_message_13(elements: &[Field]) -> ProofResult<Field> {
     if elements.len() != 13 {
         return Err(ProofError::InvalidLength {

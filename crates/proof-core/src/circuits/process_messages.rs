@@ -10,7 +10,7 @@ use crate::merkle::{
 use crate::native_types::field_to_digest;
 use crate::native_types::NativeCommand;
 use crate::packing::{
-    decode_vote_weight_96, unpack_element_high_to_low, unpack_process_messages_packed_vals,
+    decode_vote_weight_96, unpack_element_high_to_low_array, unpack_process_messages_packed_vals,
 };
 use crate::pq_kem::KemDecapsulator;
 use crate::public_output::{public_value, ProcessMessagesPublicOutput};
@@ -211,7 +211,7 @@ pub(crate) fn message_to_command_with_decapsulator(
     }
     let shared_key = decapsulator.decapsulate_to_fields(kem_ciphertext)?;
     let decrypted = decrypt_authenticated_array::<9>(message, &shared_key, &Field::from(0u32), 7)?;
-    let unpacked = unpack_element_high_to_low(&decrypted[0], 7)?;
+    let unpacked = unpack_element_high_to_low_array::<7>(&decrypted[0])?;
     let new_vote_weight = decode_vote_weight_96(&unpacked[1], &unpacked[2], &unpacked[3])?;
     let new_pub_key = [decrypted[1], decrypted[2]];
     let native_command = NativeCommand::from_fields(

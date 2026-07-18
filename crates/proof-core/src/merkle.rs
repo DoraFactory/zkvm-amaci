@@ -1,9 +1,9 @@
 use crate::error::{ProofError, ProofResult};
 use crate::field::{pow5, Field};
-use crate::hash_backend::{hash_quin, hash_quin_digests, hash_state_leaf};
+use crate::hash_backend::{hash_quin, hash_quin_digests, hash_state_leaf, hash_state_leaf_digest};
 use crate::native_types::{digest_to_field, field_to_digest, Digest};
-use crate::packing::path_index_at;
 use crate::types::PathElement;
+use num_traits::ToPrimitive;
 use std::sync::{Mutex, OnceLock};
 
 pub const QUIN_ARITY: usize = 5;
@@ -31,7 +31,7 @@ pub fn hash10_exact(values: &[Field]) -> ProofResult<Field> {
 }
 
 pub fn hash10_digest(values: &[Field]) -> ProofResult<Digest> {
-    Ok(field_to_digest(&hash10_exact(values)?))
+    hash_state_leaf_digest(values)
 }
 
 pub fn zero_root(depth: usize) -> ProofResult<Field> {
@@ -70,10 +70,16 @@ pub fn root_from_path_digest(
     path_elements: &[PathElement],
 ) -> ProofResult<Digest> {
     let mut current = *leaf;
-    for (level, siblings) in path_elements.iter().enumerate() {
+    let mut remaining_index = *leaf_index;
+    let arity = Field::from(QUIN_ARITY);
+    for siblings in path_elements {
         let sibling_digests: [Digest; QUIN_SIBLINGS] =
             std::array::from_fn(|idx| field_to_digest(&siblings[idx]));
-        let idx = path_index_at(leaf_index, level, QUIN_ARITY);
+        let (next_index, path_digit) = remaining_index.div_rem(arity);
+        remaining_index = next_index;
+        let idx = path_digit
+            .to_usize()
+            .expect("path digit is less than quin arity and fits usize");
         let mut sibling_idx = 0;
         let children: [Digest; QUIN_ARITY] = std::array::from_fn(|child_idx| {
             if child_idx == idx {

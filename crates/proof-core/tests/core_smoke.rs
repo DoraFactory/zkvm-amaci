@@ -16,10 +16,14 @@ use amaci_proof_core::crypto::{
 use amaci_proof_core::error::ProofError;
 use amaci_proof_core::field::{checked_add, checked_mul, checked_sub, ensure_bits, field, two_pow};
 use amaci_proof_core::hash_backend::{hash_fields, hash_pair, hash_public_inputs};
-use amaci_proof_core::merkle::{check_root, hash10_exact, hash5_exact, root_from_path};
+use amaci_proof_core::merkle::{
+    check_root, hash10_digest, hash10_exact, hash5_exact, root_from_path,
+};
+use amaci_proof_core::native_types::field_to_digest;
 use amaci_proof_core::packing::{
     decode_vote_weight_96, path_index_at, unpack_element_high_to_low,
-    unpack_process_messages_packed_vals, unpack_tally_packed_vals,
+    unpack_element_high_to_low_array, unpack_process_messages_packed_vals,
+    unpack_tally_packed_vals,
 };
 use amaci_proof_core::pq_kem::KemDecapsulator;
 use amaci_proof_core::public_output::public_value;
@@ -84,6 +88,10 @@ fn packing_helpers_still_parse_native_command_words() {
         unpack_element_high_to_low(&command, 3).unwrap(),
         vec![Field::from(1u32), Field::from(2u32), Field::from(3u32)]
     );
+    assert_eq!(
+        unpack_element_high_to_low_array::<3>(&command).unwrap(),
+        [Field::from(1u32), Field::from(2u32), Field::from(3u32)]
+    );
 }
 
 #[test]
@@ -138,6 +146,40 @@ fn path_indices_are_base_5_digits_by_level() {
     assert_eq!(path_index_at(&index, 0, 5), 3);
     assert_eq!(path_index_at(&index, 1, 5), 4);
     assert_eq!(path_index_at(&index, 2, 5), 2);
+}
+
+#[test]
+fn optimized_merkle_path_and_state_digest_match_field_paths() {
+    let leaf = Field::from(17u32);
+    let index = Field::from(73u32);
+    let path = vec![
+        std::array::from_fn(|i| Field::from((100 + i) as u32)),
+        std::array::from_fn(|i| Field::from((200 + i) as u32)),
+        std::array::from_fn(|i| Field::from((300 + i) as u32)),
+    ];
+
+    let mut legacy_root = leaf;
+    for (level, siblings) in path.iter().enumerate() {
+        let position = path_index_at(&index, level, 5);
+        let mut sibling_index = 0;
+        let children: [Field; 5] = std::array::from_fn(|child_index| {
+            if child_index == position {
+                legacy_root
+            } else {
+                let sibling = siblings[sibling_index];
+                sibling_index += 1;
+                sibling
+            }
+        });
+        legacy_root = hash5_exact(&children).unwrap();
+    }
+    assert_eq!(root_from_path(&leaf, &index, &path).unwrap(), legacy_root);
+
+    let state_leaf: [Field; 10] = std::array::from_fn(|i| Field::from((i + 1) as u32));
+    assert_eq!(
+        hash10_digest(&state_leaf).unwrap(),
+        field_to_digest(&hash10_exact(&state_leaf).unwrap())
+    );
 }
 
 #[test]
