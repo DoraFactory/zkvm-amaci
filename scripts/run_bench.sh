@@ -152,6 +152,7 @@ write_common_metrics() {
         logged_shard_size="${SHARD_SIZE:-default}"
       fi
       echo "shard_size=$logged_shard_size"
+      echo "global_dependencies_opt=$(last_log_value global_dependencies_opt)"
     fi
     local index label key phase_time_log
     for index in "${!timed_labels[@]}"; do

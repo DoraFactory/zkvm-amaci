@@ -628,9 +628,10 @@ fn prove_compressed(
     let input = built_in_input(circuit)?;
     let expected_output = execute_proof_logic(&input)?;
 
-    let (core_opts, shard_size) = compressed_core_opts()?;
+    let (core_opts, shard_size, global_dependencies_opt) = compressed_core_opts()?;
     let client = ProverClient::builder().cpu().core_opts(core_opts).build();
     println!("shard_size={shard_size}");
+    println!("global_dependencies_opt={global_dependencies_opt}");
     let pk = client.setup(AMACI_SP1_ELF)?;
     let mut stdin = SP1Stdin::new();
     let input_bytes = encode_input(&input);
@@ -684,12 +685,16 @@ fn prove_compressed(
     Ok(())
 }
 
-fn compressed_core_opts() -> Result<(SP1CoreOpts, usize), Box<dyn Error>> {
+fn compressed_core_opts() -> Result<(SP1CoreOpts, usize, bool), Box<dyn Error>> {
     let configured = env::var("SHARD_SIZE").ok();
     let shard_size = parse_compressed_shard_size(configured.as_deref())?;
+    let configured_global_dependencies = env::var("SP1_GLOBAL_DEPENDENCIES_OPT").ok();
+    let global_dependencies_opt =
+        parse_global_dependencies_opt(configured_global_dependencies.as_deref())?;
     let mut opts = SP1CoreOpts::default();
     opts.shard_size = shard_size;
-    Ok((opts, shard_size))
+    opts.global_dependencies_opt = global_dependencies_opt;
+    Ok((opts, shard_size, global_dependencies_opt))
 }
 
 fn parse_compressed_shard_size(configured: Option<&str>) -> Result<usize, String> {
@@ -705,6 +710,16 @@ fn parse_compressed_shard_size(configured: Option<&str>) -> Result<usize, String
         ));
     }
     Ok(shard_size)
+}
+
+fn parse_global_dependencies_opt(configured: Option<&str>) -> Result<bool, String> {
+    match configured {
+        None | Some("0" | "false") => Ok(false),
+        Some("1" | "true") => Ok(true),
+        Some(value) => Err(format!(
+            "invalid SP1_GLOBAL_DEPENDENCIES_OPT {value:?}: expected true, false, 1, or 0"
+        )),
+    }
 }
 
 fn execute(circuit: &str, public_path: Option<&Path>) -> Result<(), Box<dyn Error>> {
@@ -959,5 +974,15 @@ mod tests {
         for value in ["0", "3", "33554432", "invalid"] {
             assert!(parse_compressed_shard_size(Some(value)).is_err());
         }
+    }
+
+    #[test]
+    fn global_dependencies_opt_defaults_off_and_parses_explicit_values() {
+        assert!(!parse_global_dependencies_opt(None).unwrap());
+        assert!(!parse_global_dependencies_opt(Some("false")).unwrap());
+        assert!(!parse_global_dependencies_opt(Some("0")).unwrap());
+        assert!(parse_global_dependencies_opt(Some("true")).unwrap());
+        assert!(parse_global_dependencies_opt(Some("1")).unwrap());
+        assert!(parse_global_dependencies_opt(Some("invalid")).is_err());
     }
 }
