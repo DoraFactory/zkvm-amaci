@@ -22,6 +22,8 @@ const AMACI_SP1_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-program");
 const AMACI_SP1_TREE_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-tree-program");
 const DEFAULT_COMPRESSED_SHARD_SIZE: usize = 1 << 24;
 const MAX_COMPRESSED_SHARD_SIZE: usize = 1 << 24;
+const DEFAULT_TREE_JOBS: usize = 1;
+const MAX_TREE_JOBS: usize = 2;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -179,6 +181,7 @@ struct StageRoot {
 #[derive(Serialize)]
 struct BuildManifest {
     fanout: usize,
+    tree_jobs: usize,
     process_messages_leaf_count: u32,
     tally_leaf_count: u32,
     process_messages_levels: u32,
@@ -208,8 +211,10 @@ fn build_finalization(args: BuildFinalizationArgs) -> Result<(), Box<dyn Error>>
     println!("tally_level_widths={tally_level_widths:?}");
     println!("recursive_node_count={recursive_node_count}");
     let (core_opts, shard_size) = compressed_core_opts()?;
+    let tree_jobs = parse_tree_jobs(env::var("TREE_JOBS").ok().as_deref())?;
     let client = ProverClient::builder().cpu().core_opts(core_opts).build();
     println!("shard_size={shard_size}");
+    println!("tree_jobs={tree_jobs}");
     let base_pk = client.setup(AMACI_SP1_ELF)?;
     let tree_pk = client.setup(AMACI_SP1_TREE_ELF)?;
     let base_vkey_words = base_pk.verifying_key().hash_u32();
@@ -219,23 +224,15 @@ fn build_finalization(args: BuildFinalizationArgs) -> Result<(), Box<dyn Error>>
         tree_program_vkey: machine_vkey_digest_bytes(&tree_vkey_words),
     };
 
-    let process_root = build_stage_tree(
+    let (process_root, tally_root) = build_stage_roots(
         &client,
         &base_pk,
         &tree_pk,
         &identity,
-        StageTree::ProcessMessages,
         &args.process_children,
-        &args.output_dir,
-    )?;
-    let tally_root = build_stage_tree(
-        &client,
-        &base_pk,
-        &tree_pk,
-        &identity,
-        StageTree::Tally,
         &args.tally_children,
         &args.output_dir,
+        tree_jobs,
     )?;
 
     let finalization_children = vec![
@@ -287,6 +284,7 @@ fn build_finalization(args: BuildFinalizationArgs) -> Result<(), Box<dyn Error>>
         .join("finalization-root.verify-compressed.msg.json");
     let manifest = BuildManifest {
         fanout: TREE_FANOUT,
+        tree_jobs,
         process_messages_leaf_count: process_root.leaf_count,
         tally_leaf_count: tally_root.leaf_count,
         process_messages_levels: process_root.level_count,
@@ -324,6 +322,76 @@ fn build_finalization(args: BuildFinalizationArgs) -> Result<(), Box<dyn Error>>
     println!("close_checkpoint={}", close_checkpoint_path.display());
     println!("execute_msg={}", execute_msg_path.display());
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_stage_roots(
+    client: &CpuProver,
+    base_pk: &SP1ProvingKey,
+    tree_pk: &SP1ProvingKey,
+    identity: &TreeProgramIdentity,
+    process_children: &[PathBuf],
+    tally_children: &[PathBuf],
+    output_dir: &Path,
+    tree_jobs: usize,
+) -> Result<(StageRoot, StageRoot), Box<dyn Error>> {
+    if tree_jobs == 1 {
+        let process_root = build_stage_tree(
+            client,
+            base_pk,
+            tree_pk,
+            identity,
+            StageTree::ProcessMessages,
+            process_children,
+            output_dir,
+        )?;
+        let tally_root = build_stage_tree(
+            client,
+            base_pk,
+            tree_pk,
+            identity,
+            StageTree::Tally,
+            tally_children,
+            output_dir,
+        )?;
+        return Ok((process_root, tally_root));
+    }
+
+    std::thread::scope(|scope| {
+        let process = scope.spawn(|| {
+            build_stage_tree(
+                client,
+                base_pk,
+                tree_pk,
+                identity,
+                StageTree::ProcessMessages,
+                process_children,
+                output_dir,
+            )
+            .map_err(|err| err.to_string())
+        });
+        let tally = scope.spawn(|| {
+            build_stage_tree(
+                client,
+                base_pk,
+                tree_pk,
+                identity,
+                StageTree::Tally,
+                tally_children,
+                output_dir,
+            )
+            .map_err(|err| err.to_string())
+        });
+        let process_root = process
+            .join()
+            .map_err(|_| std::io::Error::other("process-message tree worker panicked"))?
+            .map_err(std::io::Error::other)?;
+        let tally_root = tally
+            .join()
+            .map_err(|_| std::io::Error::other("tally tree worker panicked"))?
+            .map_err(std::io::Error::other)?;
+        Ok((process_root, tally_root))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -608,6 +676,21 @@ fn parse_compressed_shard_size(configured: Option<&str>) -> Result<usize, String
     Ok(shard_size)
 }
 
+fn parse_tree_jobs(configured: Option<&str>) -> Result<usize, String> {
+    let jobs = match configured {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| format!("invalid TREE_JOBS {value:?}: expected an integer"))?,
+        None => DEFAULT_TREE_JOBS,
+    };
+    if !(1..=MAX_TREE_JOBS).contains(&jobs) {
+        return Err(format!(
+            "invalid TREE_JOBS {jobs}: expected a value from 1 to {MAX_TREE_JOBS}"
+        ));
+    }
+    Ok(jobs)
+}
+
 fn compressed_proof_bytes(proof: &SP1ProofWithPublicValues) -> Result<Vec<u8>, Box<dyn Error>> {
     match &proof.proof {
         SP1Proof::Compressed(_) => Ok(bincode::serialize(&proof.proof)?),
@@ -706,6 +789,19 @@ mod tests {
     fn compressed_shard_size_rejects_invalid_values() {
         for value in ["0", "3", "33554432", "not-an-integer"] {
             assert!(parse_compressed_shard_size(Some(value)).is_err());
+        }
+    }
+
+    #[test]
+    fn tree_jobs_defaults_to_serial_and_accepts_two() {
+        assert_eq!(parse_tree_jobs(None).unwrap(), 1);
+        assert_eq!(parse_tree_jobs(Some("2")).unwrap(), 2);
+    }
+
+    #[test]
+    fn tree_jobs_rejects_unsafe_values() {
+        for value in ["0", "3", "not-an-integer"] {
+            assert!(parse_tree_jobs(Some(value)).is_err());
         }
     }
 }

@@ -13,6 +13,7 @@ root proof. ProcessDeactivate and AddNewKey remain online contract proofs.
 Environment:
   CARGO_TARGET_DIR  Cargo target directory. Default: /tmp/zkvm-amaci-sp1-tree-target
   SHARD_SIZE        SP1 core shard size. Default: 16777216
+  TREE_JOBS         Concurrent PM/Tally stage jobs. Default: 1; maximum: 2
 USAGE
 }
 
@@ -129,6 +130,7 @@ tree_args+=(--output-dir "$output_dir")
     echo "archive=$archive"
     echo "archive_bytes=$(stat_size "$archive")"
     awk -F= '$1 == "shard_size" { value = $2 } END { print "shard_size=" value }' "$log"
+    awk -F= '$1 == "tree_jobs" { value = $2 } END { print "tree_jobs=" value }' "$log"
     awk -F': ' '/Maximum resident set size/ { print "max_rss_kbytes=" $2 }' "$time_log"
     awk -F': ' '/Elapsed \(wall clock\) time/ { print "elapsed_wall=" $2 }' "$time_log"
     echo "verify=ok"

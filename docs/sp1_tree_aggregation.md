@@ -125,6 +125,11 @@ The smaller shards did not materially improve runtime and increased peak RSS
 for this recursive workload. Re-run `scripts/run_sp1_tree_shard_sweep.sh` when
 the SP1 version, prover hardware or recursive guest changes.
 
+`TREE_JOBS=2` can build the ProcessMessages and Tally stage trees concurrently.
+The finalization node still waits for both stage roots. The default is one job
+because two compressed provers may exceed the available memory; the host
+rejects values greater than two.
+
 ## High-Performance Machine
 
 Run the complete 50-signup suite in the background:
