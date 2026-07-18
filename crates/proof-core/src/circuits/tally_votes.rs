@@ -3,7 +3,7 @@ use crate::error::{ProofError, ProofResult};
 use crate::field::{checked_add, checked_mul, pow5, Field};
 use crate::hash_backend::hash_pair;
 use crate::merkle::{
-    check_inclusion_digest, check_root, check_root_digest, state_leaf_hash_digest, zero_root,
+    check_inclusion_digest, check_root_digest, hash5_exact, state_leaf_hash_digest, zero_root,
 };
 use crate::native_types::field_to_digest;
 use crate::packing::unpack_tally_packed_vals;
@@ -91,7 +91,7 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
 
     let vo_zero_root = zero_root(input.vote_option_tree_depth)?;
     for (i, (state, votes)) in input.state_leaf.iter().zip(input.votes.iter()).enumerate() {
-        let vote_root = check_root(votes, input.vote_option_tree_depth)?;
+        let vote_root = hash5_exact(votes)?;
         let state_vo_root = state[3].clone();
         let expected_vote_root = if state_vo_root.is_zero() {
             vo_zero_root.clone()
@@ -109,7 +109,12 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
     }
 
     let is_first_batch = batch_start_index.is_zero();
-    let current_results_root = check_root(&input.current_results, input.vote_option_tree_depth)?;
+    let current_results: &VoteRow = input
+        .current_results
+        .as_slice()
+        .try_into()
+        .expect("current results length was validated against vote row width");
+    let current_results_root = hash5_exact(current_results)?;
     let current_tally_hash = hash2(&current_results_root, &input.current_results_root_salt);
     let expected_current_tally = if is_first_batch {
         Field::from(0u32)
@@ -124,13 +129,8 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
         });
     }
 
-    let new_results = tally_results(
-        &input.current_results,
-        &input.votes,
-        is_first_batch,
-        num_vote_options,
-    )?;
-    let new_results_root = check_root(&new_results, input.vote_option_tree_depth)?;
+    let new_results = tally_results(current_results, &input.votes, is_first_batch)?;
+    let new_results_root = hash5_exact(&new_results)?;
     let expected_new_tally = hash_pair(&new_results_root, &input.new_results_root_salt);
     if expected_new_tally != input.new_tally_commitment {
         return Err(ProofError::CommitmentMismatch {
@@ -160,16 +160,15 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
 }
 
 fn tally_results(
-    current_results: &[Field],
+    current_results: &VoteRow,
     votes: &[VoteRow],
     is_first_batch: bool,
-    num_vote_options: usize,
-) -> ProofResult<Vec<Field>> {
+) -> ProofResult<VoteRow> {
     let max_votes = Field::from(MAX_VOTES);
     let mut out = if is_first_batch {
-        vec![Field::from(0u32); num_vote_options]
+        [Field::from(0u32); VOTE_ROW_WORDS]
     } else {
-        current_results.to_vec()
+        *current_results
     };
     for row in votes {
         for (i, vote) in row.iter().enumerate() {
