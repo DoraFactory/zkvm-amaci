@@ -4,9 +4,12 @@ use crate::hash_backend::{hash_quin, hash_quin_digests, hash_state_leaf, hash_st
 use crate::native_types::{digest_to_field, field_to_digest, Digest};
 use crate::types::PathElement;
 use num_traits::ToPrimitive;
+use std::sync::{Mutex, OnceLock};
 
 pub const QUIN_ARITY: usize = 5;
 pub const QUIN_SIBLINGS: usize = QUIN_ARITY - 1;
+
+static ZERO_ROOTS: OnceLock<Mutex<Vec<Field>>> = OnceLock::new();
 
 pub fn hash5_exact(children: &[Field]) -> ProofResult<Field> {
     if children.len() != QUIN_ARITY {
@@ -32,6 +35,19 @@ pub fn hash10_digest(values: &[Field]) -> ProofResult<Digest> {
 }
 
 pub fn zero_root(depth: usize) -> ProofResult<Field> {
+    let roots = ZERO_ROOTS.get_or_init(|| Mutex::new(vec![Field::from(0u32)]));
+    let mut roots = roots
+        .lock()
+        .map_err(|_| ProofError::Crypto("zero root cache lock poisoned".to_string()))?;
+
+    while roots.len() <= depth {
+        let previous = *roots.last().expect("zero root cache is never empty");
+        roots.push(hash5_exact(&[previous; QUIN_ARITY])?);
+    }
+    Ok(roots[depth])
+}
+
+pub(crate) fn zero_root_uncached(depth: usize) -> ProofResult<Field> {
     let mut root = Field::from(0u32);
     for _ in 0..depth {
         root = hash5_exact(&[root; QUIN_ARITY])?;
