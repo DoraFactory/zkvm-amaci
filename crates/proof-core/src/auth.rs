@@ -13,6 +13,7 @@ const AUTH_SEED_DOMAIN: &[u8] = b"AMACI_ZKVM_ML_DSA65_TEST_SEED_V1";
 
 struct CachedAuthVerifier {
     public_key_hash: Field,
+    public_key: AuthPublicKey,
     verifying_key: VerifyingKey<MlDsa65>,
 }
 
@@ -34,31 +35,29 @@ impl CommandAuthVerifierCache {
         signature: &AuthSignature,
         packed_command: &[Field; 3],
     ) -> ProofResult<bool> {
+        if let Some(entry) = self
+            .entries
+            .iter()
+            .find(|entry| &entry.public_key_hash == expected_public_key_hash)
+        {
+            if &entry.public_key != public_key {
+                return Ok(false);
+            }
+            return verify_with_key(&entry.verifying_key, signature, packed_command);
+        }
+
         let public_key_hash = auth_public_key_hash(public_key);
         if &public_key_hash != expected_public_key_hash {
             return Ok(false);
         }
-        let verifier_index = self
-            .entries
-            .iter()
-            .position(|entry| entry.public_key_hash == public_key_hash);
-
-        let verifier_index = if let Some(index) = verifier_index {
-            index
-        } else {
-            let verifying_key = decode_verifying_key(public_key)?;
-            self.entries.push(CachedAuthVerifier {
-                public_key_hash,
-                verifying_key,
-            });
-            self.entries.len() - 1
-        };
-
-        verify_with_key(
-            &self.entries[verifier_index].verifying_key,
-            signature,
-            packed_command,
-        )
+        let verifying_key = decode_verifying_key(public_key)?;
+        let result = verify_with_key(&verifying_key, signature, packed_command)?;
+        self.entries.push(CachedAuthVerifier {
+            public_key_hash,
+            public_key: public_key.clone(),
+            verifying_key,
+        });
+        Ok(result)
     }
 }
 
@@ -156,6 +155,17 @@ mod tests {
                 &public_key,
                 &second_signature,
                 &second_command,
+            )
+            .unwrap());
+        assert_eq!(cache.entries.len(), 1);
+
+        let (different_public_key, _) = auth_keypair_from_seed_for_testing(&Field::from(456u32));
+        assert!(!cache
+            .verify(
+                &public_key_hash,
+                &different_public_key,
+                &first_signature,
+                &first_command,
             )
             .unwrap());
         assert_eq!(cache.entries.len(), 1);
