@@ -282,6 +282,21 @@ nohup env SHARD_SIZE=4194304 \
   > logs/bench-sp1-compressed-small-shard-$(date +%Y%m%d-%H%M%S).out 2>&1 &
 ```
 
+The aggregate and tree hosts use the same validated default and accept the
+same override. To benchmark recursive tree proving without regenerating child
+proofs, run:
+
+```bash
+nohup env \
+  SHARD_SIZES="16777216 8388608 4194304" \
+  SP1_TARGET_DIR=/tmp/zkvm-amaci-sp1-tree-shard-sweep-target \
+  scripts/run_sp1_tree_shard_sweep.sh fifty-signup 5 1 \
+  > logs/tree-shard-sweep-$(date +%Y%m%d-%H%M%S).out 2>&1 &
+```
+
+Each value writes to a separate tree output directory so an existing recursive
+node cache cannot distort the proving measurements.
+
 This writes:
 
 - full SDK proof: `sp1-proofs/*.sp1-compressed-proof.bin`;

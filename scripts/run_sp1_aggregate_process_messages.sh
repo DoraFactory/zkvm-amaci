@@ -15,6 +15,7 @@ Defaults:
 Environment:
   CARGO_TARGET_DIR  Cargo target directory. Default: /tmp/zkvm-amaci-sp1-agg-target
   AGGREGATE_PREFIX  Artifact prefix. Default: five-signup-process-messages
+  SHARD_SIZE        SP1 core shard size. Default: 8388608
 
 Outputs:
   logs/sp1-aggregate-process-messages-<stamp>.log
@@ -110,6 +111,7 @@ done
   echo "public_bytes_raw=$(wc -c < "$public_bytes" | tr -d ' ')"
   echo "vkey=$vkey"
   echo "vkey_bytes=$(wc -c < "$vkey" | tr -d ' ')"
+  awk -F= '$1 == "shard_size" { value = $2 } END { print "shard_size=" value }' "$log"
   awk '/Elapsed \\(wall clock\\) time/ { print "elapsed_wall_values="$0 }' "$time_log"
   awk '/Maximum resident set size/ { print "max_rss_kbytes="$6 }' "$time_log"
 } > "$metrics"

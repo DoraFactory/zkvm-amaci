@@ -9,6 +9,10 @@ usage:
 Consumes post-round SP1 compressed SDK proofs named under sp1-proofs/, builds
 separate fan-in-5 process-message and tally trees, and exports one finalization
 root proof. ProcessDeactivate and AddNewKey remain online contract proofs.
+
+Environment:
+  CARGO_TARGET_DIR  Cargo target directory. Default: /tmp/zkvm-amaci-sp1-tree-target
+  SHARD_SIZE        SP1 core shard size. Default: 8388608
 USAGE
 }
 
@@ -122,6 +126,7 @@ tree_args+=(--output-dir "$output_dir")
     echo "vkey_bytes=$(stat_size "$output_dir/finalization-root.vkey.bin")"
     echo "archive=$archive"
     echo "archive_bytes=$(stat_size "$archive")"
+    awk -F= '$1 == "shard_size" { value = $2 } END { print "shard_size=" value }' "$log"
     awk -F': ' '/Maximum resident set size/ { print "max_rss_kbytes=" $2 }' "$time_log"
     awk -F': ' '/Elapsed \(wall clock\) time/ { print "elapsed_wall=" $2 }' "$time_log"
     echo "verify=ok"

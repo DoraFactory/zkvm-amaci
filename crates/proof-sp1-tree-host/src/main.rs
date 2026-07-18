@@ -6,6 +6,7 @@ use amaci_proof_core::tree_aggregate::{
 use base64::Engine;
 use serde::Serialize;
 use serde_json::json;
+use sp1_core_executor::SP1CoreOpts;
 use sp1_sdk::blocking::{CpuProver, ProveRequest, Prover, ProverClient, SP1Stdin};
 use sp1_sdk::{
     include_elf, HashableKey, ProvingKey, SP1Proof, SP1ProofWithPublicValues, SP1ProvingKey,
@@ -19,6 +20,8 @@ use std::time::Instant;
 
 const AMACI_SP1_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-program");
 const AMACI_SP1_TREE_ELF: sp1_sdk::Elf = include_elf!("amaci-proof-sp1-tree-program");
+const DEFAULT_COMPRESSED_SHARD_SIZE: usize = 1 << 23;
+const MAX_COMPRESSED_SHARD_SIZE: usize = 1 << 24;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -204,7 +207,9 @@ fn build_finalization(args: BuildFinalizationArgs) -> Result<(), Box<dyn Error>>
     println!("process_messages_level_widths={process_level_widths:?}");
     println!("tally_level_widths={tally_level_widths:?}");
     println!("recursive_node_count={recursive_node_count}");
-    let client = ProverClient::builder().cpu().build();
+    let (core_opts, shard_size) = compressed_core_opts()?;
+    let client = ProverClient::builder().cpu().core_opts(core_opts).build();
+    println!("shard_size={shard_size}");
     let base_pk = client.setup(AMACI_SP1_ELF)?;
     let tree_pk = client.setup(AMACI_SP1_TREE_ELF)?;
     let base_vkey_words = base_pk.verifying_key().hash_u32();
@@ -583,6 +588,29 @@ fn output_metrics(output: &TreeAggregatePublicOutput) -> (u32, u32, u32) {
     }
 }
 
+fn compressed_core_opts() -> Result<(SP1CoreOpts, usize), Box<dyn Error>> {
+    let configured = env::var("SHARD_SIZE").ok();
+    let shard_size = parse_compressed_shard_size(configured.as_deref())?;
+    let mut opts = SP1CoreOpts::default();
+    opts.shard_size = shard_size;
+    Ok((opts, shard_size))
+}
+
+fn parse_compressed_shard_size(configured: Option<&str>) -> Result<usize, String> {
+    let shard_size = match configured {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| format!("invalid SHARD_SIZE {value:?}: expected an integer"))?,
+        None => DEFAULT_COMPRESSED_SHARD_SIZE,
+    };
+    if shard_size == 0 || shard_size > MAX_COMPRESSED_SHARD_SIZE || !shard_size.is_power_of_two() {
+        return Err(format!(
+            "invalid SHARD_SIZE {shard_size}: expected a power of two up to {MAX_COMPRESSED_SHARD_SIZE}"
+        ));
+    }
+    Ok(shard_size)
+}
+
 fn compressed_proof_bytes(proof: &SP1ProofWithPublicValues) -> Result<Vec<u8>, Box<dyn Error>> {
     match &proof.proof {
         SP1Proof::Compressed(_) => Ok(bincode::serialize(&proof.proof)?),
@@ -662,5 +690,25 @@ mod tests {
         assert_eq!(tree_level_widths(25), vec![5, 1]);
         assert_eq!(tree_level_widths(26), vec![6, 2, 1]);
         assert_eq!(tree_level_widths(126), vec![26, 6, 2, 1]);
+    }
+
+    #[test]
+    fn compressed_shard_size_defaults_to_benchmarked_value() {
+        assert_eq!(parse_compressed_shard_size(None).unwrap(), 1 << 23);
+    }
+
+    #[test]
+    fn compressed_shard_size_accepts_valid_override() {
+        assert_eq!(
+            parse_compressed_shard_size(Some("4194304")).unwrap(),
+            1 << 22
+        );
+    }
+
+    #[test]
+    fn compressed_shard_size_rejects_invalid_values() {
+        for value in ["0", "3", "33554432", "not-an-integer"] {
+            assert!(parse_compressed_shard_size(Some(value)).is_err());
+        }
     }
 }
