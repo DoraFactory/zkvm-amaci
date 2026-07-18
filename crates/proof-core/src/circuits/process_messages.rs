@@ -16,15 +16,8 @@ use crate::pq_kem::KemDecapsulator;
 use crate::public_output::{public_value, ProcessMessagesPublicOutput};
 use crate::types::{KemCiphertext, Message, ProcessMessagesInput, StateLeaf};
 use num_traits::One;
-use std::sync::OnceLock;
 
-static MAX_VOTE_WEIGHT: OnceLock<Field> = OnceLock::new();
-
-fn max_vote_weight() -> &'static Field {
-    MAX_VOTE_WEIGHT.get_or_init(|| {
-        Field::from_str_radix("147946756881789319005730692170996259609", 10).unwrap()
-    })
-}
+const MAX_VOTE_WEIGHT: u128 = 147_946_756_881_789_319_005_730_692_170_996_259_609;
 
 pub fn execute(input: &ProcessMessagesInput) -> ProofResult<ProcessMessagesPublicOutput> {
     if input.msgs.len() != input.batch_size {
@@ -432,7 +425,7 @@ fn message_validator(
     } else {
         false
     };
-    let vote_weight_ok = &command.new_vote_weight <= max_vote_weight();
+    let vote_weight_ok = command.new_vote_weight <= Field::from(MAX_VOTE_WEIGHT);
 
     let is_quad = packed.is_quadratic_cost == Field::one();
     let current_cost = if is_quad {
@@ -504,4 +497,17 @@ pub fn message_chain(
         }
     }
     Ok(current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_vote_weight_constant_matches_protocol_decimal() {
+        assert_eq!(
+            Field::from(MAX_VOTE_WEIGHT),
+            Field::from_str_radix("147946756881789319005730692170996259609", 10).unwrap()
+        );
+    }
 }
