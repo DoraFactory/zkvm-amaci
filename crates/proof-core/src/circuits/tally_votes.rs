@@ -10,6 +10,8 @@ use crate::packing::unpack_tally_packed_vals;
 use crate::public_output::{public_value, TallyVotesPublicOutput};
 use crate::types::{TallyVotesInput, VoteRow, VOTE_ROW_WORDS};
 
+const MAX_VOTES: u128 = 1_000_000_000_000_000_000_000_000;
+
 pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
     if input.int_state_tree_depth >= input.state_tree_depth {
         return Err(ProofError::InvalidRange {
@@ -163,7 +165,7 @@ fn tally_results(
     is_first_batch: bool,
     num_vote_options: usize,
 ) -> ProofResult<Vec<Field>> {
-    let max_votes = Field::from(10u32).pow(Field::from(24u32));
+    let max_votes = Field::from(MAX_VOTES);
     let mut out = if is_first_batch {
         vec![Field::from(0u32); num_vote_options]
     } else {

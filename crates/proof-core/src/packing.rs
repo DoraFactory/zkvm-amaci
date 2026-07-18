@@ -67,9 +67,7 @@ pub fn decode_vote_weight_96(high: &Field, mid: &Field, low: &Field) -> ProofRes
     ensure_bits("vote weight high", high, 32)?;
     ensure_bits("vote weight mid", mid, 32)?;
     ensure_bits("vote weight low", low, 32)?;
-    Ok(low
-        + (mid * Field::from(4_294_967_296u64))
-        + (high * Field::from(18_446_744_073_709_551_616u128)))
+    Ok(*low | (*mid << 32usize) | (*high << 64usize))
 }
 
 pub fn path_index_at(leaf_index: &Field, level: usize, base: usize) -> usize {

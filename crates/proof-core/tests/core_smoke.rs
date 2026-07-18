@@ -108,6 +108,10 @@ fn decodes_96_bit_vote_weight() {
     let low = Field::from(0u32);
     let out = decode_vote_weight_96(&high, &mid, &low).unwrap();
     assert_eq!(out, Field::from(18_446_744_073_709_551_616u128));
+
+    let max_chunk = Field::from(u32::MAX);
+    let out = decode_vote_weight_96(&max_chunk, &max_chunk, &max_chunk).unwrap();
+    assert_eq!(out, (Field::from(1u32) << 96usize) - Field::from(1u32));
 }
 
 #[test]

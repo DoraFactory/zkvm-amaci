@@ -32,7 +32,8 @@ impl KemDecapsulator {
     }
 
     pub fn compact_public_key(&self) -> PubKey {
-        kem_public_key_compact(&self.public_key())
+        let bytes = self.key.encapsulation_key().to_bytes();
+        compact_pair(b"public-key", bytes.as_ref())
     }
 
     pub fn decapsulate_to_fields(&self, ciphertext: &KemCiphertext) -> ProofResult<[Field; 2]> {
