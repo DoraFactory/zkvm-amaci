@@ -158,22 +158,34 @@ fn optimized_merkle_path_and_state_digest_match_field_paths() {
         std::array::from_fn(|i| Field::from((300 + i) as u32)),
     ];
 
-    let mut legacy_root = leaf;
-    for (level, siblings) in path.iter().enumerate() {
-        let position = path_index_at(&index, level, 5);
-        let mut sibling_index = 0;
-        let children: [Field; 5] = std::array::from_fn(|child_index| {
-            if child_index == position {
-                legacy_root
-            } else {
-                let sibling = siblings[sibling_index];
-                sibling_index += 1;
-                sibling
-            }
-        });
-        legacy_root = hash5_exact(&children).unwrap();
-    }
-    assert_eq!(root_from_path(&leaf, &index, &path).unwrap(), legacy_root);
+    let legacy_root_for = |index: &Field| {
+        let mut legacy_root = leaf;
+        for (level, siblings) in path.iter().enumerate() {
+            let position = path_index_at(index, level, 5);
+            let mut sibling_index = 0;
+            let children: [Field; 5] = std::array::from_fn(|child_index| {
+                if child_index == position {
+                    legacy_root
+                } else {
+                    let sibling = siblings[sibling_index];
+                    sibling_index += 1;
+                    sibling
+                }
+            });
+            legacy_root = hash5_exact(&children).unwrap();
+        }
+        legacy_root
+    };
+    assert_eq!(
+        root_from_path(&leaf, &index, &path).unwrap(),
+        legacy_root_for(&index)
+    );
+
+    let large_index = (Field::from(1u32) << 200usize) + index;
+    assert_eq!(
+        root_from_path(&leaf, &large_index, &path).unwrap(),
+        legacy_root_for(&large_index)
+    );
 
     let state_leaf: [Field; 10] = std::array::from_fn(|i| Field::from((i + 1) as u32));
     assert_eq!(

@@ -70,29 +70,42 @@ pub fn root_from_path_digest(
     path_elements: &[PathElement],
 ) -> ProofResult<Digest> {
     let mut current = *leaf;
-    let mut remaining_index = *leaf_index;
-    let arity = Field::from(QUIN_ARITY);
-    for siblings in path_elements {
-        let sibling_digests: [Digest; QUIN_SIBLINGS] =
-            std::array::from_fn(|idx| field_to_digest(&siblings[idx]));
-        let (next_index, path_digit) = remaining_index.div_rem(arity);
-        remaining_index = next_index;
-        let idx = path_digit
-            .to_usize()
-            .expect("path digit is less than quin arity and fits usize");
-        let mut sibling_idx = 0;
-        let children: [Digest; QUIN_ARITY] = std::array::from_fn(|child_idx| {
-            if child_idx == idx {
-                current
-            } else {
-                let sibling = sibling_digests[sibling_idx];
-                sibling_idx += 1;
-                sibling
-            }
-        });
-        current = hash5_digest(&children);
+    if let Some(mut remaining_index) = leaf_index.to_u64() {
+        for siblings in path_elements {
+            let path_digit = (remaining_index % QUIN_ARITY as u64) as usize;
+            remaining_index /= QUIN_ARITY as u64;
+            current = hash_path_level(&current, siblings, path_digit);
+        }
+    } else {
+        let mut remaining_index = *leaf_index;
+        let arity = Field::from(QUIN_ARITY);
+        for siblings in path_elements {
+            let (next_index, path_digit) = remaining_index.div_rem(arity);
+            remaining_index = next_index;
+            let path_digit = path_digit
+                .to_usize()
+                .expect("path digit is less than quin arity and fits usize");
+            current = hash_path_level(&current, siblings, path_digit);
+        }
     }
     Ok(current)
+}
+
+#[inline]
+fn hash_path_level(current: &Digest, siblings: &PathElement, path_digit: usize) -> Digest {
+    let sibling_digests: [Digest; QUIN_SIBLINGS] =
+        std::array::from_fn(|idx| field_to_digest(&siblings[idx]));
+    let mut sibling_index = 0;
+    let children: [Digest; QUIN_ARITY] = std::array::from_fn(|child_index| {
+        if child_index == path_digit {
+            *current
+        } else {
+            let sibling = sibling_digests[sibling_index];
+            sibling_index += 1;
+            sibling
+        }
+    });
+    hash5_digest(&children)
 }
 
 pub fn check_inclusion(
