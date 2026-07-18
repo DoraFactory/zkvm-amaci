@@ -3,7 +3,7 @@ use crate::error::{ProofError, ProofResult};
 use crate::field::{checked_add, checked_mul, pow5, Field};
 use crate::hash_backend::hash_pair;
 use crate::merkle::{
-    check_inclusion_digest, check_root_digest, hash5_exact, state_leaf_hash_digest, zero_root,
+    check_inclusion_digest, check_root_digest_owned, hash5_exact, state_leaf_hash_digest, zero_root,
 };
 use crate::native_types::field_to_digest;
 use crate::packing::unpack_tally_packed_vals;
@@ -79,7 +79,7 @@ pub fn execute(input: &TallyVotesInput) -> ProofResult<TallyVotesPublicOutput> {
     for row in &input.state_leaf {
         state_leaf_hashes.push(state_leaf_hash_digest(row)?);
     }
-    let state_subroot = check_root_digest(&state_leaf_hashes, input.int_state_tree_depth)?;
+    let state_subroot = check_root_digest_owned(state_leaf_hashes, input.int_state_tree_depth)?;
     let batch_num = packed.batch_num.clone();
     check_inclusion_digest(
         "state subtree",

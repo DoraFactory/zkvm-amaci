@@ -145,29 +145,36 @@ pub fn check_inclusion_digest(
 
 pub fn check_root(leaves: &[Field], levels: usize) -> ProofResult<Field> {
     let leaves: Vec<Digest> = leaves.iter().map(field_to_digest).collect();
-    Ok(digest_to_field(check_root_digest(&leaves, levels)?))
+    Ok(digest_to_field(check_root_digest_owned(leaves, levels)?))
 }
 
 pub fn check_root_digest(leaves: &[Digest], levels: usize) -> ProofResult<Digest> {
+    check_root_digest_owned(leaves.to_vec(), levels)
+}
+
+pub(crate) fn check_root_digest_owned(
+    mut level: Vec<Digest>,
+    levels: usize,
+) -> ProofResult<Digest> {
     let expected = pow5(QUIN_ARITY, levels);
-    if leaves.len() != expected {
+    if level.len() != expected {
         return Err(ProofError::InvalidLength {
             name: "quin check root leaves",
             expected,
-            actual: leaves.len(),
+            actual: level.len(),
         });
     }
 
-    let mut level: Vec<Digest> = leaves.to_vec();
+    let mut width = level.len();
     for _ in 0..levels {
-        let mut next = Vec::with_capacity(level.len() / QUIN_ARITY);
-        for chunk in level.chunks(QUIN_ARITY) {
-            let children: [Digest; QUIN_ARITY] = chunk
-                .try_into()
-                .expect("validated quin tree level chunks have exact arity");
-            next.push(hash5_digest(&children));
+        let parent_width = width / QUIN_ARITY;
+        for parent_index in 0..parent_width {
+            let child_offset = parent_index * QUIN_ARITY;
+            let children: [Digest; QUIN_ARITY] =
+                std::array::from_fn(|child_index| level[child_offset + child_index]);
+            level[parent_index] = hash5_digest(&children);
         }
-        level = next;
+        width = parent_width;
     }
     Ok(level[0])
 }
