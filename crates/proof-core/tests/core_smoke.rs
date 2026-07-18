@@ -29,6 +29,7 @@ use amaci_proof_core::pq_kem::KemDecapsulator;
 use amaci_proof_core::public_output::public_value;
 use amaci_proof_core::round_fixture::{
     fifteen_signup_round_fixture, fifty_signup_round_fixture, five_signup_round_fixture,
+    hundred_signup_round_fixture,
 };
 use amaci_proof_core::{execute_proof_logic, Field, ProverInput, PublicOutput};
 use num_traits::{One, ToPrimitive};
@@ -814,6 +815,139 @@ fn fifty_signup_round_fixture_executes_depth_three_batches() {
             for (idx, vote) in vote_row.iter().enumerate() {
                 final_raw_results[idx] += vote.to_u128().expect("fixture vote fits in u128");
             }
+        }
+    }
+    assert_eq!(final_raw_results, fixture.expected_raw_results);
+}
+
+#[test]
+fn hundred_signup_round_fixture_executes_9_3_1_5_profile() {
+    let fixture = hundred_signup_round_fixture().unwrap();
+    assert_eq!(fixture.round_id, "hundred-signup-100-message-9-3-1-5");
+    assert_eq!(fixture.state_tree_depth, 9);
+    assert_eq!(fixture.vote_option_tree_depth, 1);
+    assert_eq!(fixture.process_message_batch_size, 5);
+    assert_eq!(fixture.tally_batch_size, 125);
+    assert_eq!(fixture.initial_signups, 100);
+    assert_eq!(fixture.final_signups, 101);
+    assert_eq!(fixture.message_count, 100);
+    assert_eq!(fixture.deactivate_state_indices, vec![98, 99]);
+    assert_eq!(fixture.add_new_key_new_state_index, 100);
+    assert_eq!(
+        fixture
+            .votes
+            .iter()
+            .filter(|vote| vote.expected_valid)
+            .count(),
+        98
+    );
+    assert_eq!(fixture.expected_raw_results, [20, 40, 57, 76, 100]);
+    assert_eq!(fixture.stages.len(), 23);
+
+    let ProverInput::ProcessDeactivate(deactivate_input) = &fixture.stages[0].input else {
+        panic!("stage 0 must be process deactivate");
+    };
+    assert_eq!(deactivate_input.state_tree_depth, 9);
+    assert_eq!(
+        deactivate_input.current_state_leaves_path_elements[0].len(),
+        9
+    );
+    assert_eq!(
+        deactivate_input.active_state_leaves_path_elements[0].len(),
+        9
+    );
+    assert_eq!(
+        deactivate_input.deactivate_leaves_path_elements[0].len(),
+        11
+    );
+
+    let ProverInput::AddNewKey(add_key_input) = &fixture.stages[1].input else {
+        panic!("stage 1 must be add new key");
+    };
+    assert_eq!(add_key_input.state_tree_depth, 9);
+    assert_eq!(add_key_input.deactivate_leaf_path_elements.len(), 11);
+
+    for stage in &fixture.stages[2..22] {
+        let ProverInput::ProcessMessages(input) = &stage.input else {
+            panic!("stages 2 through 21 must be process messages");
+        };
+        assert_eq!(input.state_tree_depth, 9);
+        assert_eq!(input.vote_option_tree_depth, 1);
+        assert_eq!(input.batch_size, 5);
+        assert_eq!(input.current_state_leaves_path_elements[0].len(), 9);
+        assert_eq!(input.active_state_leaves_path_elements[0].len(), 9);
+        assert_eq!(input.current_vote_weights_path_elements[0].len(), 1);
+    }
+
+    let ProverInput::TallyVotes(tally_input) = &fixture.stages[22].input else {
+        panic!("stage 22 must be tally");
+    };
+    assert_eq!(tally_input.state_tree_depth, 9);
+    assert_eq!(tally_input.int_state_tree_depth, 3);
+    assert_eq!(tally_input.vote_option_tree_depth, 1);
+    assert_eq!(tally_input.state_leaf.len(), 125);
+    assert_eq!(tally_input.votes.len(), 125);
+    assert_eq!(tally_input.state_path_elements.len(), 6);
+
+    for stage in &fixture.stages {
+        assert_eq!(
+            decode_input(&encode_input(&stage.input)).unwrap(),
+            stage.input
+        );
+    }
+    assert!(
+        amaci_proof_core::sample_inputs::built_in_input("hundred-signup-process-messages-19")
+            .unwrap()
+            .is_some()
+    );
+
+    let outputs = fixture
+        .stages
+        .iter()
+        .map(|stage| execute_proof_logic(&stage.input).unwrap())
+        .collect::<Vec<_>>();
+    let encoded_outputs = outputs.iter().map(encode_public_output).collect::<Vec<_>>();
+
+    let PublicOutput::ProcessDeactivate(deactivate) = &outputs[0] else {
+        panic!("stage 0 must be process deactivate");
+    };
+    let PublicOutput::AddNewKey(add_key) = &outputs[1] else {
+        panic!("stage 1 must be add new key");
+    };
+    assert_eq!(deactivate.new_deactivate_root, add_key.deactivate_root);
+
+    let process_aggregate =
+        build_process_messages_aggregate_public_output(&encoded_outputs[2..22]).unwrap();
+    assert_eq!(process_aggregate.child_count, 20);
+    for pair in outputs[2..22].windows(2) {
+        let (PublicOutput::ProcessMessages(current), PublicOutput::ProcessMessages(next)) =
+            (&pair[0], &pair[1])
+        else {
+            panic!("process message stages must be consecutive");
+        };
+        assert_eq!(current.batch_end_hash, next.batch_start_hash);
+        assert_eq!(current.new_state_commitment, next.current_state_commitment);
+    }
+
+    let PublicOutput::ProcessMessages(first_messages) = &outputs[2] else {
+        panic!("stage 2 must be process messages");
+    };
+    assert_eq!(
+        deactivate.new_deactivate_commitment,
+        first_messages.deactivate_commitment
+    );
+    let PublicOutput::ProcessMessages(final_messages) = &outputs[21] else {
+        panic!("stage 21 must be process messages");
+    };
+    let PublicOutput::TallyVotes(tally) = &outputs[22] else {
+        panic!("stage 22 must be tally");
+    };
+    assert_eq!(final_messages.new_state_commitment, tally.state_commitment);
+
+    let mut final_raw_results = [0u128; 5];
+    for vote_row in &tally_input.votes {
+        for (idx, vote) in vote_row.iter().enumerate() {
+            final_raw_results[idx] += vote.to_u128().expect("fixture vote fits in u128");
         }
     }
     assert_eq!(final_raw_results, fixture.expected_raw_results);

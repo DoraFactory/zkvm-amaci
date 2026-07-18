@@ -16,10 +16,12 @@ use crate::types::{
 };
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub const FIVE_SIGNUP_ROUND_ID: &str = "five-signup-2-1-1-5";
 pub const FIFTEEN_SIGNUP_ROUND_ID: &str = "fifteen-signup-15-message-2-1-1-5";
 pub const FIFTY_SIGNUP_ROUND_ID: &str = "fifty-signup-50-message-3-1-1-5";
+pub const HUNDRED_SIGNUP_ROUND_ID: &str = "hundred-signup-100-message-9-3-1-5";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundStageInput {
@@ -65,6 +67,7 @@ pub struct SignupRoundFixture {
 
 pub type FifteenSignupRoundFixture = SignupRoundFixture;
 pub type FiftySignupRoundFixture = SignupRoundFixture;
+pub type HundredSignupRoundFixture = SignupRoundFixture;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundVote {
@@ -135,9 +138,7 @@ pub fn five_signup_round_fixture() -> ProofResult<FiveSignupRoundFixture> {
     let poll_id = Field::from(1u32);
     let coord_priv_key = Field::from(1001u32);
     let coord_pub_key = private_to_pub_key(&coord_priv_key);
-    let state_tree_size = 5usize.pow(state_tree_depth as u32);
     let deactivate_tree_depth = state_tree_depth + 2;
-    let deactivate_tree_size = 5usize.pow(deactivate_tree_depth as u32);
     let deactivate_index0 = 17usize;
 
     let mut users = vec![
@@ -151,14 +152,12 @@ pub fn five_signup_round_fixture() -> ProofResult<FiveSignupRoundFixture> {
 
     let zero_state_leaf = [Field::from(0u32); 10];
     let zero_state_leaf_hash = hash_state_leaf(&zero_state_leaf)?;
-    let mut state_hashes = vec![zero_state_leaf_hash; state_tree_size];
+    let mut state_tree = QuinTree::sparse(state_tree_depth, zero_state_leaf_hash)?;
     for (idx, user) in users.iter().enumerate() {
-        state_hashes[idx] = hash_state_leaf(&user.state_leaf()?)?;
+        state_tree.set(idx, hash_state_leaf(&user.state_leaf()?)?)?;
     }
-    let mut state_tree = QuinTree::new(state_hashes, state_tree_depth)?;
-
-    let mut active_tree = QuinTree::zeros(state_tree_size, state_tree_depth)?;
-    let mut deactivate_tree = QuinTree::zeros(deactivate_tree_size, deactivate_tree_depth)?;
+    let mut active_tree = QuinTree::zeros(state_tree_depth)?;
+    let mut deactivate_tree = QuinTree::zeros(deactivate_tree_depth)?;
 
     let process_deactivate = build_process_deactivate(
         &coord_priv_key,
@@ -364,6 +363,9 @@ pub fn fifteen_signup_round_fixture() -> ProofResult<FifteenSignupRoundFixture> 
         round_id: FIFTEEN_SIGNUP_ROUND_ID,
         stage_prefix: "fifteen-signup",
         state_tree_depth: 2,
+        int_state_tree_depth: 1,
+        vote_option_tree_depth: 1,
+        process_message_batch_size: 5,
         initial_signups: 15,
         user_private_key_start: 7001,
         replacement_private_key: 9001,
@@ -375,9 +377,26 @@ pub fn fifty_signup_round_fixture() -> ProofResult<FiftySignupRoundFixture> {
         round_id: FIFTY_SIGNUP_ROUND_ID,
         stage_prefix: "fifty-signup",
         state_tree_depth: 3,
+        int_state_tree_depth: 1,
+        vote_option_tree_depth: 1,
+        process_message_batch_size: 5,
         initial_signups: 50,
         user_private_key_start: 10_001,
         replacement_private_key: 20_001,
+    })
+}
+
+pub fn hundred_signup_round_fixture() -> ProofResult<HundredSignupRoundFixture> {
+    build_signup_round_fixture(ScaledRoundConfig {
+        round_id: HUNDRED_SIGNUP_ROUND_ID,
+        stage_prefix: "hundred-signup",
+        state_tree_depth: 9,
+        int_state_tree_depth: 3,
+        vote_option_tree_depth: 1,
+        process_message_batch_size: 5,
+        initial_signups: 100,
+        user_private_key_start: 30_001,
+        replacement_private_key: 40_001,
     })
 }
 
@@ -385,6 +404,9 @@ struct ScaledRoundConfig {
     round_id: &'static str,
     stage_prefix: &'static str,
     state_tree_depth: usize,
+    int_state_tree_depth: usize,
+    vote_option_tree_depth: usize,
+    process_message_batch_size: usize,
     initial_signups: usize,
     user_private_key_start: u32,
     replacement_private_key: u32,
@@ -392,14 +414,29 @@ struct ScaledRoundConfig {
 
 fn build_signup_round_fixture(config: ScaledRoundConfig) -> ProofResult<SignupRoundFixture> {
     let state_tree_depth = config.state_tree_depth;
-    let vote_option_tree_depth = 1;
-    let batch_size = 5;
+    let int_state_tree_depth = config.int_state_tree_depth;
+    let vote_option_tree_depth = config.vote_option_tree_depth;
+    let process_message_batch_size = config.process_message_batch_size;
+    let tally_batch_size = 5usize.pow(int_state_tree_depth as u32);
     let initial_signups = config.initial_signups;
     let final_signups = initial_signups + 1;
-    if initial_signups < 3 || initial_signups % batch_size != 0 {
+    if initial_signups < 3 || initial_signups % process_message_batch_size != 0 {
         return Err(crate::ProofError::Crypto(
-            "scaled round requires a signup count divisible by five and at least three".to_string(),
+            "scaled round requires a signup count divisible by the message batch and at least three"
+                .to_string(),
         ));
+    }
+    if int_state_tree_depth >= state_tree_depth {
+        return Err(crate::ProofError::Crypto(
+            "scaled round tally subtree depth must be below the state tree depth".to_string(),
+        ));
+    }
+    if 5usize.pow(vote_option_tree_depth as u32) != VOTE_ROW_WORDS {
+        return Err(crate::ProofError::InvalidLength {
+            name: "scaled round vote option width",
+            expected: VOTE_ROW_WORDS,
+            actual: 5usize.pow(vote_option_tree_depth as u32),
+        });
     }
     let poll_id = Field::from(1u32);
     let coord_priv_key = Field::from(1001u32);
@@ -413,7 +450,6 @@ fn build_signup_round_fixture(config: ScaledRoundConfig) -> ProofResult<SignupRo
         });
     }
     let deactivate_tree_depth = state_tree_depth + 2;
-    let deactivate_tree_size = 5usize.pow(deactivate_tree_depth as u32);
     let deactivate_index0 = initial_signups * 3 + 2;
     let deactivate_state_indices = [initial_signups - 2, initial_signups - 1];
 
@@ -424,13 +460,12 @@ fn build_signup_round_fixture(config: ScaledRoundConfig) -> ProofResult<SignupRo
 
     let zero_state_leaf = [Field::from(0u32); 10];
     let zero_state_leaf_hash = hash_state_leaf(&zero_state_leaf)?;
-    let mut state_hashes = vec![zero_state_leaf_hash; state_tree_size];
+    let mut state_tree = QuinTree::sparse(state_tree_depth, zero_state_leaf_hash)?;
     for (idx, user) in users.iter().enumerate() {
-        state_hashes[idx] = hash_state_leaf(&user.state_leaf()?)?;
+        state_tree.set(idx, hash_state_leaf(&user.state_leaf()?)?)?;
     }
-    let mut state_tree = QuinTree::new(state_hashes, state_tree_depth)?;
-    let mut active_tree = QuinTree::zeros(state_tree_size, state_tree_depth)?;
-    let mut deactivate_tree = QuinTree::zeros(deactivate_tree_size, deactivate_tree_depth)?;
+    let mut active_tree = QuinTree::zeros(state_tree_depth)?;
+    let mut deactivate_tree = QuinTree::zeros(deactivate_tree_depth)?;
 
     let process_deactivate = build_process_deactivate(
         &coord_priv_key,
@@ -511,14 +546,14 @@ fn build_signup_round_fixture(config: ScaledRoundConfig) -> ProofResult<SignupRo
         },
     ];
 
-    let message_batch_count = message_commands.len() / batch_size;
+    let message_batch_count = message_commands.len() / process_message_batch_size;
     let mut batch_start_hash = Field::from(0u32);
     for batch_num in 0..message_batch_count {
         let input = build_process_messages_batch(
             &coord_priv_key,
             &coord_pub_key,
             &poll_id,
-            batch_size,
+            process_message_batch_size,
             final_signups as u32,
             batch_start_hash,
             Field::from(30u32 + batch_num as u32),
@@ -527,7 +562,8 @@ fn build_signup_round_fixture(config: ScaledRoundConfig) -> ProofResult<SignupRo
             &deactivate_tree,
             &mut state_tree,
             &mut users,
-            &message_commands[batch_num * batch_size..(batch_num + 1) * batch_size],
+            &message_commands[batch_num * process_message_batch_size
+                ..(batch_num + 1) * process_message_batch_size],
         )?;
         batch_start_hash = input.batch_end_hash.clone();
         stages.push(RoundStageInput {
@@ -540,11 +576,11 @@ fn build_signup_round_fixture(config: ScaledRoundConfig) -> ProofResult<SignupRo
     let mut current_results = vec![Field::from(0u32); VOTE_ROW_WORDS];
     let mut current_results_root_salt = Field::from(0u32);
     let final_state_salt = Field::from(30u32 + message_batch_count as u32);
-    for batch_num in 0..final_signups.div_ceil(batch_size) {
+    for batch_num in 0..final_signups.div_ceil(tally_batch_size) {
         let new_results_root_salt = Field::from(41u32 + batch_num as u32);
         let input = build_tally_batch(
             state_tree_depth,
-            1,
+            int_state_tree_depth,
             vote_option_tree_depth,
             final_signups as u32,
             batch_num as u32,
@@ -584,8 +620,8 @@ fn build_signup_round_fixture(config: ScaledRoundConfig) -> ProofResult<SignupRo
         round_id: config.round_id.to_string(),
         state_tree_depth,
         vote_option_tree_depth,
-        process_message_batch_size: batch_size,
-        tally_batch_size: batch_size,
+        process_message_batch_size,
+        tally_batch_size,
         initial_signups,
         final_signups,
         message_count: message_commands.len(),
@@ -611,6 +647,14 @@ pub fn five_signup_stage_input(name: &str) -> ProofResult<Option<ProverInput>> {
 }
 
 pub fn round_stage_input(name: &str) -> ProofResult<Option<ProverInput>> {
+    if name.starts_with("hundred-signup-") {
+        let fixture = hundred_signup_round_fixture()?;
+        return Ok(fixture
+            .stages
+            .into_iter()
+            .find(|stage| stage.name == name)
+            .map(|stage| stage.input));
+    }
     if name.starts_with("fifty-signup-") {
         let fixture = fifty_signup_round_fixture()?;
         return Ok(fixture
@@ -1164,49 +1208,78 @@ fn pack_command_data(
 
 #[derive(Clone)]
 struct QuinTree {
-    leaves: Vec<Field>,
     depth: usize,
+    capacity: usize,
+    zero_nodes: Vec<Field>,
+    nodes: Vec<HashMap<usize, Field>>,
 }
 
 impl QuinTree {
-    fn zeros(size: usize, depth: usize) -> ProofResult<Self> {
-        Self::new(vec![Field::from(0u32); size], depth)
+    fn zeros(depth: usize) -> ProofResult<Self> {
+        Self::sparse(depth, Field::from(0u32))
     }
 
-    fn new(leaves: Vec<Field>, depth: usize) -> ProofResult<Self> {
-        let expected = 5usize.pow(depth as u32);
-        if leaves.len() != expected {
-            return Err(crate::ProofError::InvalidLength {
-                name: "fixture quin leaves",
-                expected,
-                actual: leaves.len(),
-            });
+    fn sparse(depth: usize, zero_leaf: Field) -> ProofResult<Self> {
+        let capacity = 5usize.checked_pow(depth as u32).ok_or_else(|| {
+            crate::ProofError::Crypto("fixture quin tree capacity overflow".to_string())
+        })?;
+        let mut zero_nodes = Vec::with_capacity(depth + 1);
+        zero_nodes.push(zero_leaf);
+        for level in 0..depth {
+            let child = zero_nodes[level];
+            zero_nodes.push(hash5_exact(&[child; 5])?);
         }
-        Ok(Self { leaves, depth })
+        let nodes = (0..=depth).map(|_| HashMap::new()).collect();
+        Ok(Self {
+            depth,
+            capacity,
+            zero_nodes,
+            nodes,
+        })
     }
 
     fn leaf(&self, index: usize) -> &Field {
-        &self.leaves[index]
+        self.node(0, index)
     }
 
     fn set(&mut self, index: usize, leaf: Field) -> ProofResult<()> {
-        if index >= self.leaves.len() {
+        if index >= self.capacity {
             return Err(crate::ProofError::InvalidLength {
                 name: "fixture quin index",
-                expected: self.leaves.len(),
+                expected: self.capacity,
                 actual: index + 1,
             });
         }
-        self.leaves[index] = leaf;
+        if leaf == self.zero_nodes[0] {
+            self.nodes[0].remove(&index);
+        } else {
+            self.nodes[0].insert(index, leaf);
+        }
+
+        let mut child_index = index;
+        for level in 0..self.depth {
+            let parent_index = child_index / 5;
+            let first_child = parent_index * 5;
+            let children: [Field; 5] =
+                std::array::from_fn(|offset| self.node(level, first_child + offset).clone());
+            let parent = hash5_exact(&children)?;
+            if parent == self.zero_nodes[level + 1] {
+                self.nodes[level + 1].remove(&parent_index);
+            } else {
+                self.nodes[level + 1].insert(parent_index, parent);
+            }
+            child_index = parent_index;
+        }
         Ok(())
     }
 
     fn root(&self) -> ProofResult<Field> {
-        self.root_and_path(0).map(|(root, _)| root)
+        Ok(self.node(self.depth, 0).clone())
     }
 
     fn path(&self, index: usize) -> ProofResult<Vec<PathElement>> {
-        self.root_and_path(index).map(|(_, path)| path)
+        self.validate_index(index)?;
+        Ok(self.path_from_level(index, 0))
     }
 
     fn subtree_path(
@@ -1214,47 +1287,87 @@ impl QuinTree {
         subtree_index: usize,
         subtree_depth: usize,
     ) -> ProofResult<Vec<PathElement>> {
-        let subtree_size = 5usize.pow(subtree_depth as u32);
         let upper_depth = self.depth.checked_sub(subtree_depth).ok_or_else(|| {
             crate::ProofError::Crypto("fixture subtree depth exceeds tree depth".to_string())
         })?;
-        let mut level = self.leaves.clone();
-        for _ in 0..subtree_depth {
-            let mut next = Vec::with_capacity(level.len() / 5);
-            for chunk in level.chunks(5) {
-                next.push(hash5_exact(chunk)?);
-            }
-            level = next;
+        let upper_capacity = 5usize.checked_pow(upper_depth as u32).ok_or_else(|| {
+            crate::ProofError::Crypto("fixture quin subtree capacity overflow".to_string())
+        })?;
+        if subtree_index >= upper_capacity {
+            return Err(crate::ProofError::InvalidLength {
+                name: "fixture quin subtree index",
+                expected: upper_capacity,
+                actual: subtree_index + 1,
+            });
         }
-        let upper_tree = QuinTree::new(level, upper_depth)?;
-        let _ = subtree_size;
-        upper_tree.path(subtree_index)
+        Ok(self.path_from_level(subtree_index, subtree_depth))
     }
 
-    fn root_and_path(&self, index: usize) -> ProofResult<(Field, Vec<PathElement>)> {
-        let mut level = self.leaves.clone();
+    fn node(&self, level: usize, index: usize) -> &Field {
+        self.nodes[level]
+            .get(&index)
+            .unwrap_or(&self.zero_nodes[level])
+    }
+
+    fn validate_index(&self, index: usize) -> ProofResult<()> {
+        if index >= self.capacity {
+            return Err(crate::ProofError::InvalidLength {
+                name: "fixture quin index",
+                expected: self.capacity,
+                actual: index + 1,
+            });
+        }
+        Ok(())
+    }
+
+    fn path_from_level(&self, index: usize, start_level: usize) -> Vec<PathElement> {
         let mut idx = index;
-        let mut path = Vec::with_capacity(self.depth);
-        for _ in 0..self.depth {
+        let mut path = Vec::with_capacity(self.depth - start_level);
+        for level in start_level..self.depth {
             let group_start = (idx / 5) * 5;
             let child_index = idx % 5;
             let mut siblings = [Field::from(0u32); 4];
             let mut sibling_idx = 0;
             for child in 0..5 {
                 if child != child_index {
-                    siblings[sibling_idx] = level[group_start + child].clone();
+                    siblings[sibling_idx] = self.node(level, group_start + child).clone();
                     sibling_idx += 1;
                 }
             }
             path.push(siblings);
-
-            let mut next = Vec::with_capacity(level.len() / 5);
-            for chunk in level.chunks(5) {
-                next.push(hash5_exact(chunk)?);
-            }
-            level = next;
             idx /= 5;
         }
-        Ok((level[0].clone(), path))
+        path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merkle::root_from_path;
+
+    #[test]
+    fn sparse_quin_tree_supports_depth_nine_paths_without_dense_allocation() {
+        let zero = Field::from(0u32);
+        let mut tree = QuinTree::zeros(9).unwrap();
+        assert_eq!(tree.root().unwrap(), zero_root(9).unwrap());
+
+        for (index, value) in [(0usize, 11u32), (100, 22), (1_953_124, 33)] {
+            tree.set(index, Field::from(value)).unwrap();
+        }
+        let root = tree.root().unwrap();
+        for index in [0usize, 100, 777_777, 1_953_124] {
+            let rebuilt = root_from_path(
+                tree.leaf(index),
+                &Field::from(index),
+                &tree.path(index).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(rebuilt, root);
+        }
+        assert_eq!(tree.subtree_path(0, 3).unwrap().len(), 6);
+
+        tree.set(100, zero).unwrap();
+        assert_eq!(*tree.leaf(100), zero);
     }
 }
