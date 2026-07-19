@@ -48,6 +48,10 @@ The CLIs accept these native fixtures:
 - `fifty-signup-add-new-key`
 - `fifty-signup-process-messages-{0..9}`
 - `fifty-signup-tally-{0..10}`
+- `hundred-signup-process-deactivate`
+- `hundred-signup-add-new-key`
+- `hundred-signup-process-messages-{0..19}`
+- `hundred-signup-tally-0`
 
 The default circuit for both RISC Zero and SP1 hosts is
 `process-messages-native-2-1-5-full`.
@@ -67,6 +71,10 @@ documented in [`docs/sp1_tree_aggregation.md`](docs/sp1_tree_aggregation.md).
 The larger `3-1-1-5` benchmark uses 50 signups, 50 messages and 51 final state
 leaves; its proving and E2E commands are in
 [`docs/fifty_signup_tree_e2e.md`](docs/fifty_signup_tree_e2e.md).
+
+The `9-3-1-5` hundred-user round supports frozen witnesses, resumable child
+jobs, multi-machine proof generation, and one finalization root. See
+[`docs/sp1_distributed_proving.md`](docs/sp1_distributed_proving.md).
 
 Profile the shared protocol logic without proving:
 

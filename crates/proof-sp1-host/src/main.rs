@@ -1,5 +1,5 @@
 use amaci_proof_core::{
-    codec::{decode_public_output, encode_input},
+    codec::{decode_input, decode_public_output, encode_input},
     sample_inputs,
 };
 use amaci_proof_core::{execute_proof_logic, ProverInput, PublicOutput};
@@ -26,13 +26,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = env::args().skip(1).collect::<Vec<_>>();
     match parse_command(&args)? {
+        Command::ProgramInfo => program_info()?,
         Command::Prove {
             circuit,
+            input_path,
             proof_path,
             public_path,
-        } => prove(&circuit, proof_path.as_deref(), public_path.as_deref())?,
+        } => prove(
+            &circuit,
+            input_path.as_deref(),
+            proof_path.as_deref(),
+            public_path.as_deref(),
+        )?,
         Command::ProveGroth16 {
             circuit,
+            input_path,
             proof_path,
             proof_bytes_path,
             public_path,
@@ -40,6 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             vkey_path,
         } => prove_groth16(
             &circuit,
+            input_path.as_deref(),
             proof_path.as_deref(),
             proof_bytes_path.as_deref(),
             public_path.as_deref(),
@@ -48,6 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?,
         Command::ProveCompressed {
             circuit,
+            input_path,
             proof_path,
             proof_bytes_path,
             public_path,
@@ -55,6 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             vkey_path,
         } => prove_compressed(
             &circuit,
+            input_path.as_deref(),
             proof_path.as_deref(),
             proof_bytes_path.as_deref(),
             public_path.as_deref(),
@@ -93,21 +104,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?,
         Command::Execute {
             circuit,
+            input_path,
             public_path,
-        } => execute(&circuit, public_path.as_deref())?,
+        } => execute(&circuit, input_path.as_deref(), public_path.as_deref())?,
     }
 
     Ok(())
 }
 
 enum Command {
+    ProgramInfo,
     Prove {
         circuit: String,
+        input_path: Option<PathBuf>,
         proof_path: Option<PathBuf>,
         public_path: Option<PathBuf>,
     },
     ProveGroth16 {
         circuit: String,
+        input_path: Option<PathBuf>,
         proof_path: Option<PathBuf>,
         proof_bytes_path: Option<PathBuf>,
         public_path: Option<PathBuf>,
@@ -116,6 +131,7 @@ enum Command {
     },
     ProveCompressed {
         circuit: String,
+        input_path: Option<PathBuf>,
         proof_path: Option<PathBuf>,
         proof_bytes_path: Option<PathBuf>,
         public_path: Option<PathBuf>,
@@ -142,12 +158,18 @@ enum Command {
     },
     Execute {
         circuit: String,
+        input_path: Option<PathBuf>,
         public_path: Option<PathBuf>,
     },
 }
 
 fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
-    if args.first().map(String::as_str) == Some("verify") {
+    if args.first().map(String::as_str) == Some("program-info") {
+        if args.len() != 1 {
+            return Err(format!("program-info takes no arguments\n\n{}", usage()).into());
+        }
+        Ok(Command::ProgramInfo)
+    } else if args.first().map(String::as_str) == Some("verify") {
         parse_verify_command(&args[1..])
     } else if args.first().map(String::as_str) == Some("verify-groth16") {
         parse_verify_groth16_command(&args[1..])
@@ -168,6 +190,7 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
             .unwrap_or_else(|| DEFAULT_CIRCUIT.to_string());
         Ok(Command::Prove {
             circuit,
+            input_path: None,
             proof_path: None,
             public_path: None,
         })
@@ -176,6 +199,7 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 
 fn parse_prove_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     let mut circuit = DEFAULT_CIRCUIT.to_string();
+    let mut input_path = None;
     let mut proof_path = None;
     let mut public_path = None;
     let mut i = 0;
@@ -187,6 +211,10 @@ fn parse_prove_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 
     while i < args.len() {
         match args[i].as_str() {
+            "--input" => {
+                i += 1;
+                input_path = Some(next_path(args, i, "--input")?);
+            }
             "--proof" => {
                 i += 1;
                 proof_path = Some(next_path(args, i, "--proof")?);
@@ -203,6 +231,7 @@ fn parse_prove_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 
     Ok(Command::Prove {
         circuit,
+        input_path,
         proof_path,
         public_path,
     })
@@ -210,6 +239,7 @@ fn parse_prove_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 
 fn parse_prove_groth16_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     let mut circuit = DEFAULT_CIRCUIT.to_string();
+    let mut input_path = None;
     let mut proof_path = None;
     let mut proof_bytes_path = None;
     let mut public_path = None;
@@ -224,6 +254,10 @@ fn parse_prove_groth16_command(args: &[String]) -> Result<Command, Box<dyn Error
 
     while i < args.len() {
         match args[i].as_str() {
+            "--input" => {
+                i += 1;
+                input_path = Some(next_path(args, i, "--input")?);
+            }
             "--proof" => {
                 i += 1;
                 proof_path = Some(next_path(args, i, "--proof")?);
@@ -256,6 +290,7 @@ fn parse_prove_groth16_command(args: &[String]) -> Result<Command, Box<dyn Error
 
     Ok(Command::ProveGroth16 {
         circuit,
+        input_path,
         proof_path,
         proof_bytes_path,
         public_path,
@@ -266,6 +301,7 @@ fn parse_prove_groth16_command(args: &[String]) -> Result<Command, Box<dyn Error
 
 fn parse_prove_compressed_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     let mut circuit = DEFAULT_CIRCUIT.to_string();
+    let mut input_path = None;
     let mut proof_path = None;
     let mut proof_bytes_path = None;
     let mut public_path = None;
@@ -280,6 +316,10 @@ fn parse_prove_compressed_command(args: &[String]) -> Result<Command, Box<dyn Er
 
     while i < args.len() {
         match args[i].as_str() {
+            "--input" => {
+                i += 1;
+                input_path = Some(next_path(args, i, "--input")?);
+            }
             "--proof" => {
                 i += 1;
                 proof_path = Some(next_path(args, i, "--proof")?);
@@ -312,6 +352,7 @@ fn parse_prove_compressed_command(args: &[String]) -> Result<Command, Box<dyn Er
 
     Ok(Command::ProveCompressed {
         circuit,
+        input_path,
         proof_path,
         proof_bytes_path,
         public_path,
@@ -468,6 +509,7 @@ fn parse_verify_compressed_command(args: &[String]) -> Result<Command, Box<dyn E
 
 fn parse_execute_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     let mut circuit = DEFAULT_CIRCUIT.to_string();
+    let mut input_path = None;
     let mut public_path = None;
     let mut i = 0;
 
@@ -478,6 +520,10 @@ fn parse_execute_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 
     while i < args.len() {
         match args[i].as_str() {
+            "--input" => {
+                i += 1;
+                input_path = Some(next_path(args, i, "--input")?);
+            }
             "--public" => {
                 i += 1;
                 public_path = Some(next_path(args, i, "--public")?);
@@ -492,6 +538,7 @@ fn parse_execute_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
 
     Ok(Command::Execute {
         circuit,
+        input_path,
         public_path,
     })
 }
@@ -509,15 +556,27 @@ fn next_value(args: &[String], index: usize, flag: &str) -> Result<String, Box<d
 }
 
 fn usage() -> &'static str {
-    "usage:\n  amaci-proof-sp1-host [circuit]\n  amaci-proof-sp1-host execute [circuit] [--public PATH]\n  amaci-proof-sp1-host prove [circuit] [--proof PATH] [--public PATH]\n  amaci-proof-sp1-host prove-compressed [circuit] [--proof PATH] [--proof-bytes PATH] [--public PATH] [--public-bytes PATH] [--vkey PATH]\n  amaci-proof-sp1-host prove-groth16 [circuit] [--proof PATH] [--proof-bytes PATH] [--public PATH] [--public-bytes PATH] [--vkey PATH]\n  amaci-proof-sp1-host verify --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-compressed --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-compressed --proof-bytes PATH --public-bytes PATH --vkey PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof-bytes PATH --public-bytes PATH --vkey HASH [--public PATH]"
+    "usage:\n  amaci-proof-sp1-host program-info\n  amaci-proof-sp1-host [circuit]\n  amaci-proof-sp1-host execute [circuit] [--input PATH] [--public PATH]\n  amaci-proof-sp1-host prove [circuit] [--input PATH] [--proof PATH] [--public PATH]\n  amaci-proof-sp1-host prove-compressed [circuit] [--input PATH] [--proof PATH] [--proof-bytes PATH] [--public PATH] [--public-bytes PATH] [--vkey PATH]\n  amaci-proof-sp1-host prove-groth16 [circuit] [--input PATH] [--proof PATH] [--proof-bytes PATH] [--public PATH] [--public-bytes PATH] [--vkey PATH]\n  amaci-proof-sp1-host verify --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-compressed --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-compressed --proof-bytes PATH --public-bytes PATH --vkey PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof PATH [--public PATH]\n  amaci-proof-sp1-host verify-groth16 --proof-bytes PATH --public-bytes PATH --vkey HASH [--public PATH]\n\n--input expects proof-core canonical binary input produced by encode_input."
+}
+
+fn program_info() -> Result<(), Box<dyn Error>> {
+    let client = ProverClient::builder().cpu().build();
+    let pk = client.setup(AMACI_SP1_ELF)?;
+    println!("program_vkey_hash={}", pk.verifying_key().bytes32());
+    println!(
+        "compressed_vkey_hash={}",
+        hex_bytes(&compressed_vkey_hash_bytes(pk.verifying_key()))
+    );
+    Ok(())
 }
 
 fn prove(
     circuit: &str,
+    input_path: Option<&Path>,
     proof_path: Option<&Path>,
     public_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let input = built_in_input(circuit)?;
+    let input = load_input(circuit, input_path)?;
     let expected_output = execute_proof_logic(&input)?;
 
     let client = ProverClient::builder().cpu().build();
@@ -555,13 +614,14 @@ fn prove(
 
 fn prove_groth16(
     circuit: &str,
+    input_path: Option<&Path>,
     proof_path: Option<&Path>,
     proof_bytes_path: Option<&Path>,
     public_path: Option<&Path>,
     public_bytes_path: Option<&Path>,
     vkey_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let input = built_in_input(circuit)?;
+    let input = load_input(circuit, input_path)?;
     let expected_output = execute_proof_logic(&input)?;
 
     let client = ProverClient::builder().cpu().build();
@@ -619,13 +679,14 @@ fn prove_groth16(
 
 fn prove_compressed(
     circuit: &str,
+    input_path: Option<&Path>,
     proof_path: Option<&Path>,
     proof_bytes_path: Option<&Path>,
     public_path: Option<&Path>,
     public_bytes_path: Option<&Path>,
     vkey_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let input = built_in_input(circuit)?;
+    let input = load_input(circuit, input_path)?;
     let expected_output = execute_proof_logic(&input)?;
 
     let (core_opts, shard_size) = compressed_core_opts()?;
@@ -707,8 +768,12 @@ fn parse_compressed_shard_size(configured: Option<&str>) -> Result<usize, String
     Ok(shard_size)
 }
 
-fn execute(circuit: &str, public_path: Option<&Path>) -> Result<(), Box<dyn Error>> {
-    let input = built_in_input(circuit)?;
+fn execute(
+    circuit: &str,
+    input_path: Option<&Path>,
+    public_path: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
+    let input = load_input(circuit, input_path)?;
     let expected_output = execute_proof_logic(&input)?;
 
     let client = ProverClient::builder().cpu().build();
@@ -872,6 +937,15 @@ fn compressed_vkey_hash_bytes(vk: &impl HashableKey) -> Vec<u8> {
         .expect("serializing compressed vkey hash should not fail")
 }
 
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write;
+        write!(&mut out, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    out
+}
+
 fn verify_compressed_artifacts(
     proof_bytes: &[u8],
     public_values: &[u8],
@@ -937,6 +1011,18 @@ fn built_in_input(circuit: &str) -> Result<ProverInput, Box<dyn Error>> {
     })
 }
 
+fn load_input(circuit: &str, input_path: Option<&Path>) -> Result<ProverInput, Box<dyn Error>> {
+    match input_path {
+        Some(path) => {
+            let bytes = fs::read(path)?;
+            let input = decode_input(&bytes)?;
+            println!("input={}", path.display());
+            Ok(input)
+        }
+        None => built_in_input(circuit),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,5 +1045,48 @@ mod tests {
         for value in ["0", "3", "33554432", "invalid"] {
             assert!(parse_compressed_shard_size(Some(value)).is_err());
         }
+    }
+
+    #[test]
+    fn compressed_command_accepts_frozen_input_path() {
+        let args = vec![
+            "prove-compressed".to_string(),
+            "hundred-signup-tally-0".to_string(),
+            "--input".to_string(),
+            "fixture.input.bin".to_string(),
+        ];
+        let Command::ProveCompressed {
+            circuit,
+            input_path,
+            ..
+        } = parse_command(&args).unwrap()
+        else {
+            panic!("expected compressed proving command");
+        };
+        assert_eq!(circuit, "hundred-signup-tally-0");
+        assert_eq!(input_path, Some(PathBuf::from("fixture.input.bin")));
+    }
+
+    #[test]
+    fn program_info_rejects_extra_arguments() {
+        assert!(parse_command(&["program-info".into(), "extra".into()]).is_err());
+        assert!(matches!(
+            parse_command(&["program-info".into()]).unwrap(),
+            Command::ProgramInfo
+        ));
+    }
+
+    #[test]
+    fn frozen_input_round_trips_through_host_loader() {
+        let input = built_in_input("hundred-signup-tally-0").unwrap();
+        let path = env::temp_dir().join(format!(
+            "amaci-sp1-host-input-{}-{}.bin",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        fs::write(&path, encode_input(&input)).unwrap();
+        let loaded = load_input("unused-circuit-name", Some(&path)).unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(loaded, input);
     }
 }

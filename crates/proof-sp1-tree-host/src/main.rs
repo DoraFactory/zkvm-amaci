@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = env::args().skip(1).collect::<Vec<_>>();
     match parse_command(&args)? {
+        Command::ProgramInfo => program_info()?,
         Command::BuildFinalization(args) => build_finalization(args)?,
         Command::VerifyFinalization(args) => verify_finalization(args)?,
     }
@@ -37,6 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 enum Command {
+    ProgramInfo,
     BuildFinalization(BuildFinalizationArgs),
     VerifyFinalization(VerifyFinalizationArgs),
 }
@@ -56,6 +58,8 @@ struct VerifyFinalizationArgs {
 
 fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
     match args.first().map(String::as_str) {
+        Some("program-info") if args.len() == 1 => Ok(Command::ProgramInfo),
+        Some("program-info") => Err("program-info takes no arguments".into()),
         Some("build-finalization") => {
             parse_build_finalization(&args[1..]).map(Command::BuildFinalization)
         }
@@ -65,6 +69,29 @@ fn parse_command(args: &[String]) -> Result<Command, Box<dyn Error>> {
         Some("--help") | Some("-h") | None => Err(usage().into()),
         Some(other) => Err(format!("unknown command: {other}\n\n{}", usage()).into()),
     }
+}
+
+fn program_info() -> Result<(), Box<dyn Error>> {
+    let client = ProverClient::builder().cpu().build();
+    let base_pk = client.setup(AMACI_SP1_ELF)?;
+    let tree_pk = client.setup(AMACI_SP1_TREE_ELF)?;
+    println!(
+        "base_program_vkey_hash={}",
+        base_pk.verifying_key().bytes32()
+    );
+    println!(
+        "tree_program_vkey_hash={}",
+        tree_pk.verifying_key().bytes32()
+    );
+    println!(
+        "base_compressed_vkey_hash={}",
+        hex_bytes(&compressed_vkey_hash_bytes(base_pk.verifying_key()))
+    );
+    println!(
+        "tree_compressed_vkey_hash={}",
+        hex_bytes(&compressed_vkey_hash_bytes(tree_pk.verifying_key()))
+    );
+    Ok(())
 }
 
 fn parse_build_finalization(args: &[String]) -> Result<BuildFinalizationArgs, Box<dyn Error>> {
@@ -672,7 +699,7 @@ fn tree_level_widths(mut child_count: usize) -> Vec<usize> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  amaci-proof-sp1-tree-host build-finalization --process-child PATH ... --tally-child PATH ... [--output-dir DIR]\n  amaci-proof-sp1-tree-host verify-finalization --proof PATH\n  amaci-proof-sp1-tree-host verify-finalization --proof-bytes PATH --public-bytes PATH --vkey PATH"
+    "usage:\n  amaci-proof-sp1-tree-host program-info\n  amaci-proof-sp1-tree-host build-finalization --process-child PATH ... --tally-child PATH ... [--output-dir DIR]\n  amaci-proof-sp1-tree-host verify-finalization --proof PATH\n  amaci-proof-sp1-tree-host verify-finalization --proof-bytes PATH --public-bytes PATH --vkey PATH"
 }
 
 #[cfg(test)]
@@ -687,6 +714,15 @@ mod tests {
         assert_eq!(tree_level_widths(25), vec![5, 1]);
         assert_eq!(tree_level_widths(26), vec![6, 2, 1]);
         assert_eq!(tree_level_widths(126), vec![26, 6, 2, 1]);
+    }
+
+    #[test]
+    fn program_info_rejects_extra_arguments() {
+        assert!(parse_command(&["program-info".into(), "extra".into()]).is_err());
+        assert!(matches!(
+            parse_command(&["program-info".into()]).unwrap(),
+            Command::ProgramInfo
+        ));
     }
 
     #[test]
