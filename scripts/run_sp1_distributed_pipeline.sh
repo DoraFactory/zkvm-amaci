@@ -373,7 +373,7 @@ build_worker_bundle() {
   local manifest_checksum
   manifest_checksum="$(sha256_file "$work_dir/checksums.sha256")"
   local base_target_dir="${SP1_TARGET_DIR:-$DEFAULT_SP1_TARGET_DIR}"
-  local tree_target_dir="${TREE_TARGET_DIR:-$DEFAULT_TREE_TARGET_DIR}"
+  local tree_target_dir="${TREE_TARGET_DIR:-$base_target_dir}"
   local bundle_dir="$work_dir/worker-bundle"
   local archive="${work_dir}-worker-bundle.tar.gz"
 

@@ -84,7 +84,6 @@ scripts/run_sp1_distributed_pipeline.sh prepare-witnesses
 stamp=$(date +%Y%m%d-%H%M%S)
 nohup env \
   SP1_TARGET_DIR=/tmp/zkvm-amaci-sp1-hundred-9315-target \
-  TREE_TARGET_DIR=/tmp/zkvm-amaci-sp1-hundred-tree-target \
   scripts/run_sp1_distributed_pipeline.sh build-worker-bundle \
   > "logs/sp1-worker-bundle-${stamp}.out" 2>&1 &
 ```
